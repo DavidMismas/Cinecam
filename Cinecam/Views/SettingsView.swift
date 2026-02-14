@@ -38,7 +38,7 @@ struct SettingsView: View {
                     .listRowBackground(CineTheme.darkGray)
                     
                     Section(header: Text("About").foregroundColor(CineTheme.orange)) {
-                        Text("Cinecam v1.0")
+                        Text("Cinerec v1.0")
                             .foregroundColor(.white)
                     }
                     .listRowBackground(CineTheme.darkGray)
