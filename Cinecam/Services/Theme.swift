@@ -2,7 +2,7 @@ import SwiftUI
 
 struct CineTheme {
     static let orange = Color(red: 1.0, green: 0.6, blue: 0.0) // Cinema Orange
-    static let darkBackground = Color.black
+    static let darkBackground = Color(white: 0.06)
     static let darkGray = Color(white: 0.15)
     static let textMain = Color.white
     static let textSecondary = Color.gray

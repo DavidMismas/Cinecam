@@ -3,84 +3,138 @@ import AVKit
 
 struct PresetSelectionView: View {
     @ObservedObject var viewModel: CameraViewModel
-    
-    let columns = [
-        GridItem(.adaptive(minimum: 100), spacing: 10)
-    ]
-    
+
     var body: some View {
-        VStack {
-            // Preview Area
+        VStack(spacing: 0) {
             if let player = viewModel.player {
                 CineVideoPlayer(player: player)
-                    .frame(height: 300)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 470)
                     .cornerRadius(CineTheme.buttonCornerRadius)
-                    .padding()
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
             }
             
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 10) {
-                    ForEach(MoviePreset.allCases) { preset in
-                        PresetButton(preset: preset, isSelected: viewModel.selectedPreset == preset) {
-                            viewModel.selectedPreset = preset
-                            viewModel.updatePlayerPreview()
+            Spacer(minLength: 12)
+            
+            VStack(spacing: 14) {
+                Text("Choose Your Look")
+                    .font(CineTheme.fontHeadline)
+                    .foregroundColor(CineTheme.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                
+                GeometryReader { geometry in
+                    let spacing: CGFloat = 12
+                    let visibleCards: CGFloat = 3
+                    let cardSide = max(84, (geometry.size.width - (spacing * (visibleCards - 1))) / visibleCards)
+                    
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: spacing) {
+                            ForEach(MoviePreset.allCases) { preset in
+                                PresetCard(
+                                    preset: preset,
+                                    isSelected: viewModel.selectedPreset == preset
+                                ) {
+                                    viewModel.selectedPreset = preset
+                                    viewModel.updatePlayerPreview()
+                                }
+                                .frame(width: cardSide, height: cardSide)
+                            }
                         }
                     }
                 }
-                .padding()
-            }
+                .frame(height: 114)
             
-            HStack {
-                Button(action: { viewModel.navigateBackToCamera() }) {
-                    Text("Back to Camera")
-                }
-                .cineButtonStyle(isPrimary: false)
-                
-                Button(action: {
-                    if viewModel.selectedPreset != nil {
-                        viewModel.navigateToAdjustments()
+                HStack {
+                    Button(action: { viewModel.navigateBackToCamera() }) {
+                        Text("Back to Camera")
                     }
-                }) {
-                    Text("Next: Adjustments")
+                    .cineButtonStyle(isPrimary: false)
+                    
+                    Button(action: {
+                        if viewModel.selectedPreset != nil {
+                            viewModel.navigateToAdjustments()
+                        }
+                    }) {
+                        Text("Next: Adjustments")
+                    }
+                    .cineButtonStyle(isPrimary: true)
+                    .disabled(viewModel.selectedPreset == nil)
+                    .opacity(viewModel.selectedPreset == nil ? 0.5 : 1.0)
                 }
-                .cineButtonStyle(isPrimary: true)
-                .disabled(viewModel.selectedPreset == nil)
-                .opacity(viewModel.selectedPreset == nil ? 0.5 : 1.0)
+                .padding(.top, 2)
             }
-            .padding()
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 12)
         }
     }
 }
 
-struct PresetButton: View {
+private extension MoviePreset {
+    var symbolName: String {
+        switch self {
+        case .matrix:
+            return "cpu.fill"
+        case .bladeRunner2049:
+            return "sun.max.fill"
+        case .sinCity:
+            return "drop.fill"
+        case .theBatman:
+            return "moon.stars.fill"
+        case .strangerThings:
+            return "sparkles.tv.fill"
+        case .dune:
+            return "sun.haze.fill"
+        case .drive:
+            return "car.fill"
+        case .madMax:
+            return "flame.fill"
+        case .revenant:
+            return "leaf.fill"
+        case .inTheMoodForLove:
+            return "heart.fill"
+        case .seven:
+            return "7.circle.fill"
+        case .vertigo:
+            return "hurricane"
+        case .orderOfPhoenix:
+            return "wand.and.stars"
+        case .hero:
+            return "shield.lefthalf.filled"
+        case .laLaLand:
+            return "music.note"
+        }
+    }
+}
+
+struct PresetCard: View {
     let preset: MoviePreset
     let isSelected: Bool
     let action: () -> Void
     
     var body: some View {
         Button(action: action) {
-            VStack {
-                // Placeholder for thumbnail. In real app, generate from video frame.
-                Rectangle()
-                    .fill(Color.gray)
-                    .aspectRatio(16/9, contentMode: .fit)
-                    .overlay(
-                        Text(preset.title.prefix(1))
-                            .font(.largeTitle)
-                            .foregroundColor(.white)
-                    )
+            VStack(spacing: 6) {
+                Image(systemName: preset.symbolName)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(CineTheme.orange)
                 
                 Text(preset.title)
-                    .font(CineTheme.fontBody)
-                    .foregroundColor(isSelected ? CineTheme.orange : .white)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundColor(CineTheme.orange)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.75)
             }
-            .padding(8)
-            .background(isSelected ? Color.white.opacity(0.1) : Color.clear)
-            .cornerRadius(8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(CineTheme.darkBackground)
+            .cornerRadius(14)
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? CineTheme.orange : Color.clear, lineWidth: 2)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(
+                        isSelected ? CineTheme.orange : CineTheme.orange.opacity(0.40),
+                        lineWidth: isSelected ? 2.2 : 1
+                    )
             )
         }
     }

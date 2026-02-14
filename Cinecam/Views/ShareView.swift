@@ -1,13 +1,18 @@
 import SwiftUI
 import AVKit
+import Photos
+import UIKit
 
 struct ShareView: View {
     @ObservedObject var viewModel: CameraViewModel
     @State private var isSharing = false
     @State private var sharePlayer: AVPlayer?
+    @State private var playerURL: URL?
+    @State private var isSavingToPhotos = false
+    @State private var statusMessage: String?
     
     var body: some View {
-        VStack {
+        VStack(spacing: 16) {
             Text("Your Cinematic Masterpiece")
                 .font(CineTheme.fontTitle)
                 .foregroundColor(CineTheme.orange)
@@ -15,14 +20,34 @@ struct ShareView: View {
             
             if let player = sharePlayer {
                 CineVideoPlayer(player: player)
+                    .frame(maxWidth: 380)
+                    .frame(height: 220)
                     .cornerRadius(CineTheme.buttonCornerRadius)
+                    .clipped()
                     .padding()
             } else {
                 CinemaRenderAnimationView()
+                    .frame(maxWidth: 380)
+                    .frame(height: 220)
                     .padding()
             }
             
             Spacer()
+            
+            HStack {
+                Button(action: saveVideoToGallery) {
+                    Text(isSavingToPhotos ? "Saving..." : "Save")
+                }
+                .cineButtonStyle(isPrimary: true)
+                .disabled(viewModel.processedVideoURL == nil || isSavingToPhotos)
+                .opacity((viewModel.processedVideoURL == nil || isSavingToPhotos) ? 0.5 : 1.0)
+                
+                Button(action: openGallery) {
+                    Text("Open Gallery")
+                }
+                .cineButtonStyle(isPrimary: false)
+            }
+            .padding(.horizontal)
             
             HStack {
                 Button(action: { viewModel.navigateBackToCamera() }) {
@@ -42,17 +67,31 @@ struct ShareView: View {
                     }
                 }
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.bottom)
         }
+        .overlay {
+            if let statusMessage {
+                StatusPopupView(message: statusMessage)
+                    .allowsHitTesting(false)
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: statusMessage != nil)
         .onAppear {
             prepareSharePlayer(with: viewModel.processedVideoURL)
         }
         .onChange(of: viewModel.processedVideoURL) { _, newURL in
             prepareSharePlayer(with: newURL)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime, object: sharePlayer?.currentItem)) { _ in
+            sharePlayer?.seek(to: .zero)
+            sharePlayer?.play()
+        }
         .onDisappear {
             sharePlayer?.pause()
             sharePlayer = nil
+            playerURL = nil
         }
     }
     
@@ -60,12 +99,115 @@ struct ShareView: View {
         guard let url else {
             sharePlayer?.pause()
             sharePlayer = nil
+            playerURL = nil
+            return
+        }
+        
+        if playerURL == url, let sharePlayer {
+            sharePlayer.play()
             return
         }
         
         let player = AVPlayer(url: url)
         viewModel.configureInlinePlayback(player)
+        player.actionAtItemEnd = .none
         sharePlayer = player
+        playerURL = url
+        player.play()
+    }
+    
+    private func saveVideoToGallery() {
+        guard let url = viewModel.processedVideoURL else {
+            showStatus("Video is still rendering")
+            return
+        }
+        
+        isSavingToPhotos = true
+        
+        if #available(iOS 14, *) {
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+                handlePhotoPermission(status: status, videoURL: url)
+            }
+        } else {
+            PHPhotoLibrary.requestAuthorization { status in
+                handlePhotoPermission(status: status, videoURL: url)
+            }
+        }
+    }
+    
+    private func handlePhotoPermission(status: PHAuthorizationStatus, videoURL: URL) {
+        let granted = status == .authorized || status == .limited
+        
+        guard granted else {
+            DispatchQueue.main.async {
+                isSavingToPhotos = false
+                showStatus("Photos access denied")
+            }
+            return
+        }
+        
+        PHPhotoLibrary.shared().performChanges {
+            PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: videoURL)
+        } completionHandler: { success, _ in
+            DispatchQueue.main.async {
+                isSavingToPhotos = false
+                showStatus(success ? "Saved to gallery" : "Save failed")
+            }
+        }
+    }
+    
+    private func openGallery() {
+        let application = UIApplication.shared
+        let candidates = ["photos-redirect://", "photos://"].compactMap(URL.init(string:))
+        
+        func openNext(at index: Int) {
+            guard index < candidates.count else {
+                showStatus("Could not open gallery")
+                return
+            }
+            
+            application.open(candidates[index], options: [:]) { opened in
+                if !opened {
+                    openNext(at: index + 1)
+                }
+            }
+        }
+        
+        openNext(at: 0)
+    }
+    
+    private func showStatus(_ message: String) {
+        DispatchQueue.main.async {
+            statusMessage = message
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+                if statusMessage == message {
+                    statusMessage = nil
+                }
+            }
+        }
+    }
+}
+
+private struct StatusPopupView: View {
+    let message: String
+    
+    var body: some View {
+        Text(message)
+            .font(.system(size: 15, weight: .semibold, design: .rounded))
+            .foregroundColor(CineTheme.orange)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(CineTheme.darkGray.opacity(0.96))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(CineTheme.orange.opacity(0.75), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 6)
+            .padding(.horizontal, 20)
     }
 }
 

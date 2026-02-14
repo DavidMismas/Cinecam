@@ -30,9 +30,29 @@ class VideoProcessor: ObservableObject {
     
     // MARK: - Export
     
+    private static func makeExportSession(for asset: AVAsset, codec: VideoCodecPreference) -> AVAssetExportSession? {
+        var presetsToTry: [String] = []
+        
+        switch codec {
+        case .h265:
+            presetsToTry = [AVAssetExportPresetHEVCHighestQuality, AVAssetExportPresetHighestQuality]
+        case .h264:
+            presetsToTry = [AVAssetExportPresetHighestQuality]
+        }
+        
+        for preset in presetsToTry {
+            if let session = AVAssetExportSession(asset: asset, presetName: preset) {
+                return session
+            }
+        }
+        
+        return AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough)
+    }
+
     func exportVideo(asset: AVAsset, 
                      preset: MoviePreset?, 
                      adjustments: AdjustmentSettings?, 
+                     codecPreference: VideoCodecPreference,
                      start: Double? = nil,
                      end: Double? = nil,
                      completion: @escaping (Result<URL, Error>) -> Void) {
@@ -47,7 +67,7 @@ class VideoProcessor: ObservableObject {
         
         Task {
             do {
-                guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+                guard let exportSession = Self.makeExportSession(for: asset, codec: codecPreference) else {
                     throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not create export session"])
                 }
                 

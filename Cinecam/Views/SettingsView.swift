@@ -18,7 +18,22 @@ struct SettingsView: View {
                         .pickerStyle(.segmented)
                         .tint(CineTheme.orange)
                         
+                        Picker("Codec", selection: $cameraManager.selectedVideoCodec) {
+                            ForEach(VideoCodecPreference.allCases) { codec in
+                                Text(codec.title).tag(codec)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .tint(CineTheme.orange)
+                        .disabled(cameraManager.useProRes)
+                        
                         Toggle("Apple ProRes", isOn: $cameraManager.useProRes)
+                        
+                        if cameraManager.useProRes {
+                            Text("Codec selection is disabled while ProRes is enabled.")
+                                .font(.footnote)
+                                .foregroundColor(CineTheme.textSecondary)
+                        }
                     }
                     .listRowBackground(CineTheme.darkGray)
                     

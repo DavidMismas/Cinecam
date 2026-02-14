@@ -1,5 +1,7 @@
 import SwiftUI
 import AVFoundation
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject var viewModel = CameraViewModel()
@@ -34,6 +36,7 @@ struct CameraScreen: View {
     @ObservedObject var cameraManager: CameraManager
     
     @State private var showSettings = false
+    @State private var showVideoImportPicker = false
     @State private var rotationAngle: Angle = .zero
     private let previewAspectRatio: CGFloat = 9.0 / 16.0
     
@@ -44,7 +47,7 @@ struct CameraScreen: View {
     
     var body: some View {
         ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
+            CineTheme.darkBackground.edgesIgnoringSafeArea(.all)
             
             // Camera Preview (Bordered)
             VStack {
@@ -54,7 +57,7 @@ struct CameraScreen: View {
                     // still appears as a normal 16:9 preview to the user.
                     .aspectRatio(previewAspectRatio, contentMode: .fit)
                     .frame(maxWidth: .infinity)
-                    .background(Color.black)
+                    .background(CineTheme.darkBackground)
                     .overlay {
                         FocusFeedbackOverlay(feedback: cameraManager.focusFeedback)
                     }
@@ -123,8 +126,9 @@ struct CameraScreen: View {
                                     rotationAngle: rotationAngle
                                 )
                             } else {
-                                Color.clear
-                                    .frame(width: 56, height: 56)
+                                ImportVideoButton(rotationAngle: rotationAngle) {
+                                    showVideoImportPicker = true
+                                }
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -132,6 +136,12 @@ struct CameraScreen: View {
                     .padding(.horizontal, 28)
                 }
                 .padding(.bottom, 72)
+            }
+        }
+        .sheet(isPresented: $showVideoImportPicker) {
+            VideoImportPicker { importedURL in
+                guard let importedURL else { return }
+                viewModel.importVideo(from: importedURL)
             }
         }
         .onAppear {
@@ -254,6 +264,27 @@ struct RecordingTimeBadge: View {
     }
 }
 
+struct ImportVideoButton: View {
+    let rotationAngle: Angle
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "film.stack")
+                .foregroundColor(.white)
+                .font(.system(size: 22, weight: .semibold))
+                .frame(width: 56, height: 56)
+                .background(Color.black.opacity(0.5))
+                .clipShape(Circle())
+                .overlay(
+                    Circle().stroke(Color.white, lineWidth: 1)
+                )
+        }
+        .rotationEffect(rotationAngle)
+        .animation(.default, value: rotationAngle)
+    }
+}
+
 struct FocusFeedbackOverlay: View {
     let feedback: FocusFeedback?
     
@@ -309,5 +340,73 @@ struct FocusFeedbackMarker: View {
                 .clipShape(Capsule())
         }
         .shadow(color: Color.black.opacity(0.4), radius: 6, x: 0, y: 2)
+    }
+}
+
+struct VideoImportPicker: UIViewControllerRepresentable {
+    let onPick: (URL?) -> Void
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick)
+    }
+    
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.filter = .videos
+        configuration.selectionLimit = 1
+        
+        let controller = PHPickerViewController(configuration: configuration)
+        controller.delegate = context.coordinator
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+    
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        private let onPick: (URL?) -> Void
+        
+        init(onPick: @escaping (URL?) -> Void) {
+            self.onPick = onPick
+        }
+        
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            picker.dismiss(animated: true)
+            
+            guard let provider = results.first?.itemProvider else {
+                onPick(nil)
+                return
+            }
+            
+            let movieType = UTType.movie.identifier
+            guard provider.hasItemConformingToTypeIdentifier(movieType) else {
+                onPick(nil)
+                return
+            }
+            
+            provider.loadFileRepresentation(forTypeIdentifier: movieType) { [onPick] pickedURL, _ in
+                guard let pickedURL else {
+                    DispatchQueue.main.async {
+                        onPick(nil)
+                    }
+                    return
+                }
+                
+                let fileExtension = pickedURL.pathExtension.isEmpty ? "mov" : pickedURL.pathExtension
+                let copiedURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension(fileExtension)
+                
+                do {
+                    try FileManager.default.copyItem(at: pickedURL, to: copiedURL)
+                    DispatchQueue.main.async {
+                        onPick(copiedURL)
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        onPick(nil)
+                    }
+                }
+            }
+        }
     }
 }

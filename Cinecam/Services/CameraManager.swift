@@ -2,6 +2,31 @@ import AVFoundation
 import SwiftUI
 import Combine
 
+enum VideoCodecPreference: String, CaseIterable, Identifiable {
+    case h264
+    case h265
+    
+    var id: String { rawValue }
+    
+    var title: String {
+        switch self {
+        case .h264:
+            return "H.264"
+        case .h265:
+            return "H.265"
+        }
+    }
+    
+    var captureCodec: AVVideoCodecType {
+        switch self {
+        case .h264:
+            return .h264
+        case .h265:
+            return .hevc
+        }
+    }
+}
+
 struct FocusFeedback: Identifiable {
     let id = UUID()
     let previewPoint: CGPoint
@@ -27,6 +52,13 @@ class CameraManager: NSObject, ObservableObject {
     @Published var recordingDuration: TimeInterval = 0
     private var recordingTimer: Timer?
     @Published var useProRes: Bool = false {
+        didSet {
+            sessionQueue.async { [weak self] in
+                self?.configureOutput()
+            }
+        }
+    }
+    @Published var selectedVideoCodec: VideoCodecPreference = .h264 {
         didSet {
             sessionQueue.async { [weak self] in
                 self?.configureOutput()
@@ -223,15 +255,27 @@ class CameraManager: NSObject, ObservableObject {
                  videoOutput.setOutputSettings([AVVideoCodecKey: availableCodec], for: connection)
              } else {
                  print("ProRes not supported on this device/configuration.")
-                 // Fallback to HEVC
-                 videoOutput.setOutputSettings([AVVideoCodecKey: AVVideoCodecType.hevc], for: connection)
+                 setPreferredCodec(selectedVideoCodec.captureCodec, for: connection)
              }
         } else {
-            // HEVC
-            if videoOutput.availableVideoCodecTypes.contains(.hevc) {
-                videoOutput.setOutputSettings([AVVideoCodecKey: AVVideoCodecType.hevc], for: connection)
-            }
+            setPreferredCodec(selectedVideoCodec.captureCodec, for: connection)
         }
+    }
+    
+    private func setPreferredCodec(_ codec: AVVideoCodecType, for connection: AVCaptureConnection) {
+        if videoOutput.availableVideoCodecTypes.contains(codec) {
+            videoOutput.setOutputSettings([AVVideoCodecKey: codec], for: connection)
+            return
+        }
+        
+        // H.264 should be broadly available on iOS devices.
+        if videoOutput.availableVideoCodecTypes.contains(.h264) {
+            print("Preferred codec \(codec.rawValue) unavailable. Falling back to H.264.")
+            videoOutput.setOutputSettings([AVVideoCodecKey: AVVideoCodecType.h264], for: connection)
+            return
+        }
+        
+        print("No supported codec found for current output connection.")
     }
     
     private func setupCaptureRotationCoordinator(for device: AVCaptureDevice) {

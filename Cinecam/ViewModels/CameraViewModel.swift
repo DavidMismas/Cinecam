@@ -36,10 +36,7 @@ class CameraViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] url in
                 guard let self = self, let url = url else { return }
-                self.processedVideoURL = nil
-                self.recordedVideoURL = url
-                self.setupPlayer(with: url)
-                self.currentScreen = .presetSelection
+                self.loadSourceVideo(url)
             }
             .store(in: &cancellables)
             
@@ -97,7 +94,27 @@ class CameraViewModel: ObservableObject {
     
     // MARK: - Video Handling
     
+    func importVideo(from url: URL) {
+        selectedPreset = nil
+        adjustmentSettings = AdjustmentSettings()
+        activeRenderToken = UUID()
+        loadSourceVideo(url)
+    }
+    
+    private func loadSourceVideo(_ url: URL) {
+        processedVideoURL = nil
+        recordedVideoURL = url
+        setupPlayer(with: url)
+        currentScreen = .presetSelection
+    }
+    
     func setupPlayer(with url: URL) {
+        NotificationCenter.default.removeObserver(
+            self,
+            name: .AVPlayerItemDidPlayToEndTime,
+            object: nil
+        )
+        
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
         self.player = AVPlayer(playerItem: item)
@@ -172,7 +189,8 @@ class CameraViewModel: ObservableObject {
         processedVideoURL = nil
         videoProcessor.exportVideo(asset: asset, 
                                    preset: preset, 
-                                   adjustments: adjustments) { [weak self] result in
+                                   adjustments: adjustments,
+                                   codecPreference: cameraManager.selectedVideoCodec) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self, self.activeRenderToken == renderToken else { return }
                 switch result {
