@@ -666,7 +666,7 @@ public struct PresetService {
         let extent = image.extent.integral
         guard extent.width.isFinite, extent.height.isFinite, extent.width > 0, extent.height > 0 else { return image }
 
-        let shift = amount * 24.0
+        let shift = amount * 14.0
         let clamped = image.clampedToExtent()
         let magentaSource = clamped.transformed(by: .init(translationX: shift, y: 0)).cropped(to: extent)
         let greenSource = clamped.transformed(by: .init(translationX: -shift, y: 0)).cropped(to: extent)
@@ -722,7 +722,7 @@ public struct PresetService {
         let mono = CIFilter.colorControls()
         mono.inputImage = noise
         mono.saturation = 0
-        mono.contrast = 1.75
+        mono.contrast = 1.35
         mono.brightness = 0
         noise = mono.outputImage ?? noise
 
@@ -739,7 +739,7 @@ public struct PresetService {
         alphaMapped.rVector = CIVector(x: 1, y: 0, z: 0, w: 0)
         alphaMapped.gVector = CIVector(x: 0, y: 1, z: 0, w: 0)
         alphaMapped.bVector = CIVector(x: 0, y: 0, z: 1, w: 0)
-        let mappedAmount = min(max(amount * 1.9, 0.0), 0.35)
+        let mappedAmount = min(max(amount * 0.95, 0.0), 0.16)
         alphaMapped.aVector = CIVector(x: 0, y: 0, z: 0, w: mappedAmount)
         noise = alphaMapped.outputImage ?? noise
 
@@ -762,7 +762,7 @@ public struct PresetService {
 
         let edges = CIFilter.edges()
         edges.inputImage = mask
-        edges.intensity = Float(3.2 + (amount * 18.0))
+        edges.intensity = Float(2.6 + (amount * 12.0))
         mask = edges.outputImage ?? mask
 
         let soften = CIFilter.gaussianBlur()
@@ -772,7 +772,7 @@ public struct PresetService {
 
         let shape = CIFilter.colorControls()
         shape.inputImage = mask
-        shape.contrast = 8.0
+        shape.contrast = 5.0
         shape.brightness = -0.05
         mask = shape.outputImage ?? mask
 

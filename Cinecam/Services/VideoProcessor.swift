@@ -42,9 +42,9 @@ class VideoProcessor: ObservableObject {
         
         switch codec {
         case .h265:
-            presetsToTry = [AVAssetExportPresetHEVCHighestQuality, AVAssetExportPresetHighestQuality]
+            presetsToTry = [AVAssetExportPresetHEVC3840x2160, AVAssetExportPresetHEVCHighestQuality, AVAssetExportPreset3840x2160, AVAssetExportPresetHighestQuality]
         case .h264:
-            presetsToTry = [AVAssetExportPresetHighestQuality]
+            presetsToTry = [AVAssetExportPreset3840x2160, AVAssetExportPresetHighestQuality]
         }
         
         for preset in presetsToTry {
@@ -92,6 +92,10 @@ class VideoProcessor: ObservableObject {
                 }
                 
                 // Configure Session
+                exportSession.shouldOptimizeForNetworkUse = false
+                if hasVisualProcessing {
+                    exportSession.canPerformMultiplePassesOverSourceMediaData = true
+                }
                 // Note: export(to:as:) sets outputURL and outputFileType, so we don't need to set them on session if we pass them.
                 // But we definitely need to set videoComposition and timeRange BEFORE export.
                 

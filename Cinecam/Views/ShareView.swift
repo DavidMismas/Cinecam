@@ -21,7 +21,8 @@ struct ShareView: View {
                 Text("Your Cinematic Masterpiece")
                     .font(CineTheme.fontTitle)
                     .foregroundColor(CineTheme.orange)
-                    .padding()
+                    .padding(.top, 12)
+                    .padding(.bottom, 6)
                 
                 if let player = sharePlayer {
                     CineVideoPlayer(player: player)
@@ -37,8 +38,8 @@ struct ShareView: View {
                         .padding(.horizontal, 16)
                 } else {
                     CinemaRenderAnimationView(renderProgress: viewModel.renderProgress)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: min(previewMaxHeight, 250))
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        .padding(.top, 18)
                         .padding(.horizontal, 16)
                 }
                 
