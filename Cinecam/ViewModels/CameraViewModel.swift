@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import Combine
 import MediaPlayer
+import UIKit
 
 enum AppScreen {
     case camera
@@ -27,6 +28,7 @@ class CameraViewModel: ObservableObject {
     @Published var player: AVPlayer?
     @Published var recordingTimeFormatted: String = "00:00"
     @Published var renderProgress: Double = 0.0
+    @Published private(set) var isRenderingFinalVideo = false
     
     private var cancellables = Set<AnyCancellable>()
     private var activeRenderToken = UUID()
@@ -48,6 +50,26 @@ class CameraViewModel: ObservableObject {
                 self?.recordingTimeFormatted = self?.formatDuration(duration) ?? "00:00"
             }
             .store(in: &cancellables)
+        
+        cameraManager.$isRecording
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateIdleTimerState()
+            }
+            .store(in: &cancellables)
+        
+        $isRenderingFinalVideo
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateIdleTimerState()
+            }
+            .store(in: &cancellables)
+    }
+    
+    deinit {
+        UIApplication.shared.isIdleTimerDisabled = false
     }
     
     private func formatDuration(_ duration: TimeInterval) -> String {
@@ -91,6 +113,7 @@ class CameraViewModel: ObservableObject {
         recordedVideoURL = nil
         processedVideoURL = nil
         renderProgress = 0.0
+        isRenderingFinalVideo = false
         activeRenderToken = UUID()
         player = nil
     }
@@ -101,6 +124,7 @@ class CameraViewModel: ObservableObject {
         selectedPreset = nil
         adjustmentSettings = AdjustmentSettings()
         renderProgress = 0.0
+        isRenderingFinalVideo = false
         activeRenderToken = UUID()
         loadSourceVideo(url)
     }
@@ -108,6 +132,7 @@ class CameraViewModel: ObservableObject {
     private func loadSourceVideo(_ url: URL) {
         processedVideoURL = nil
         renderProgress = 0.0
+        isRenderingFinalVideo = false
         recordedVideoURL = url
         setupPlayer(with: url)
         currentScreen = .presetSelection
@@ -160,10 +185,13 @@ class CameraViewModel: ObservableObject {
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            updateIdleTimerState()
             break
         case .inactive, .background:
+            UIApplication.shared.isIdleTimerDisabled = false
             pausePlaybackAndClearNowPlaying()
         @unknown default:
+            UIApplication.shared.isIdleTimerDisabled = false
             pausePlaybackAndClearNowPlaying()
         }
     }
@@ -185,7 +213,10 @@ class CameraViewModel: ObservableObject {
     // MARK: - Rendering
     
     func renderFinalVideo() {
-        guard let url = recordedVideoURL else { return }
+        guard let url = recordedVideoURL else {
+            isRenderingFinalVideo = false
+            return
+        }
         let preset = selectedPreset
         let adjustments = adjustmentSettings
         let asset = AVURLAsset(url: url)
@@ -193,6 +224,7 @@ class CameraViewModel: ObservableObject {
         
         processedVideoURL = nil
         renderProgress = 0.0
+        isRenderingFinalVideo = true
         videoProcessor.exportVideo(asset: asset, 
                                    preset: preset, 
                                    adjustments: adjustments,
@@ -206,14 +238,20 @@ class CameraViewModel: ObservableObject {
                 switch result {
                 case .success(let finalUrl):
                     self.renderProgress = 1.0
+                    self.isRenderingFinalVideo = false
                     self.processedVideoURL = finalUrl
                     // Pre-load the shared video into a player if needed, or just keep the preview player
                 case .failure(let error):
                     print("Export failed: \(error)")
                     self.renderProgress = 0.0
+                    self.isRenderingFinalVideo = false
                     self.processedVideoURL = nil
                 }
             }
         }
+    }
+    
+    private func updateIdleTimerState() {
+        UIApplication.shared.isIdleTimerDisabled = cameraManager.isRecording || isRenderingFinalVideo
     }
 }

@@ -346,6 +346,12 @@ struct CinemaRenderAnimationView: View {
                 Text("\(percent)%")
                     .font(CineTheme.fontHeadline)
                     .foregroundColor(.white)
+                
+                Text("Keep the app open. Do not lock your phone while rendering.")
+                    .font(.footnote)
+                    .foregroundColor(CineTheme.orange.opacity(0.9))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
             }
             
             Text("Developing your final cut")
