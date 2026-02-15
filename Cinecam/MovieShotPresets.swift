@@ -95,6 +95,11 @@ private struct GradeProfile {
 
 public struct PresetService {
     private static let baseTemperature: CGFloat = 6500
+    private static let presetContrastCompression: Float = 0.32
+    private static let presetExposureCompression: Float = 0.45
+    private static let presetBrightnessLift: Float = 0.012
+    private static let minimumShadowLift: Float = 0.16
+    private static let minimumHighlightAmount: Float = 0.90
 
     public static func apply(preset: MoviePreset, to image: CIImage, at time: CMTime? = nil) -> CIImage {
         let graded = applyColorGrading(preset, to: image)
@@ -135,13 +140,13 @@ public struct PresetService {
                 bVector: CIVector(x: 0.00, y: 0.10, z: 0.74, w: 0.0),
                 biasVector: CIVector(x: 0.000, y: 0.006, z: 0.000, w: 0.0),
                 saturation: 0.78,
-                contrast: 1.20,
-                brightness: -0.015,
+                contrast: 1.14,
+                brightness: -0.008,
                 targetTemperature: 5750,
                 targetTint: -16,
-                exposure: -0.10,
-                shadowAmount: -0.08,
-                highlightAmount: 0.92
+                exposure: -0.06,
+                shadowAmount: 0.10,
+                highlightAmount: 0.94
             )
 
         case .bladeRunner2049:
@@ -167,13 +172,13 @@ public struct PresetService {
                 bVector: CIVector(x: 0.01, y: 0.12, z: 0.84, w: 0.0),
                 biasVector: CIVector(x: 0.006, y: 0.010, z: 0.014, w: 0.0),
                 saturation: 0.58,
-                contrast: 1.18,
-                brightness: -0.035,
+                contrast: 1.12,
+                brightness: -0.022,
                 targetTemperature: 5400,
                 targetTint: -14,
-                exposure: -0.35,
-                shadowAmount: 0.06,
-                highlightAmount: 0.86
+                exposure: -0.24,
+                shadowAmount: 0.18,
+                highlightAmount: 0.88
             )
 
         case .strangerThings:
@@ -215,12 +220,12 @@ public struct PresetService {
                 bVector: CIVector(x: 0.02, y: 0.11, z: 1.02, w: 0.0),
                 biasVector: CIVector(x: 0.008, y: -0.002, z: 0.014, w: 0.0),
                 saturation: 1.14,
-                contrast: 1.24,
+                contrast: 1.16,
                 brightness: -0.015,
                 targetTemperature: 7100,
                 targetTint: 22,
-                exposure: -0.08,
-                shadowAmount: -0.10,
+                exposure: -0.03,
+                shadowAmount: 0.10,
                 highlightAmount: 0.94
             )
 
@@ -231,13 +236,13 @@ public struct PresetService {
                 bVector: CIVector(x: 0.00, y: 0.14, z: 0.74, w: 0.0),
                 biasVector: CIVector(x: 0.024, y: 0.010, z: -0.018, w: 0.0),
                 saturation: 1.16,
-                contrast: 1.24,
+                contrast: 1.16,
                 brightness: -0.010,
                 targetTemperature: 5000,
                 targetTint: 6,
-                exposure: -0.04,
-                shadowAmount: -0.06,
-                highlightAmount: 0.86
+                exposure: -0.01,
+                shadowAmount: 0.08,
+                highlightAmount: 0.89
             )
 
         case .revenant:
@@ -279,13 +284,13 @@ public struct PresetService {
                 bVector: CIVector(x: 0.00, y: 0.10, z: 0.92, w: 0.0),
                 biasVector: CIVector(x: -0.010, y: 0.000, z: 0.010, w: 0.0),
                 saturation: 0.62,
-                contrast: 1.20,
-                brightness: -0.030,
+                contrast: 1.12,
+                brightness: -0.018,
                 targetTemperature: 5250,
                 targetTint: -14,
-                exposure: -0.18,
-                shadowAmount: -0.14,
-                highlightAmount: 0.84
+                exposure: -0.10,
+                shadowAmount: 0.10,
+                highlightAmount: 0.87
             )
 
         case .vertigo:
@@ -311,13 +316,13 @@ public struct PresetService {
                 bVector: CIVector(x: 0.00, y: 0.11, z: 1.03, w: 0.0),
                 biasVector: CIVector(x: -0.008, y: 0.000, z: 0.016, w: 0.0),
                 saturation: 0.68,
-                contrast: 1.12,
-                brightness: -0.028,
+                contrast: 1.08,
+                brightness: -0.016,
                 targetTemperature: 5000,
                 targetTint: -12,
-                exposure: -0.14,
-                shadowAmount: -0.08,
-                highlightAmount: 0.86
+                exposure: -0.08,
+                shadowAmount: 0.10,
+                highlightAmount: 0.88
             )
 
         case .hero:
@@ -386,8 +391,9 @@ public struct PresetService {
         let controls = CIFilter.colorControls()
         controls.inputImage = output
         controls.saturation = profile.saturation
-        controls.contrast = profile.contrast
-        controls.brightness = profile.brightness
+        let flattenedContrast = 1.0 + ((profile.contrast - 1.0) * presetContrastCompression)
+        controls.contrast = flattenedContrast
+        controls.brightness = profile.brightness + presetBrightnessLift
         output = controls.outputImage ?? output
 
         let temperature = CIFilter.temperatureAndTint()
@@ -399,15 +405,17 @@ public struct PresetService {
         if abs(profile.exposure) > 0.001 {
             let exposure = CIFilter.exposureAdjust()
             exposure.inputImage = output
-            exposure.ev = profile.exposure
+            exposure.ev = profile.exposure * presetExposureCompression
             output = exposure.outputImage ?? output
         }
 
-        if abs(profile.shadowAmount) > 0.001 || abs(profile.highlightAmount - 1.0) > 0.001 {
+        let flattenedShadowAmount = max(profile.shadowAmount, minimumShadowLift)
+        let flattenedHighlightAmount = max(profile.highlightAmount, minimumHighlightAmount)
+        if abs(flattenedShadowAmount) > 0.001 || abs(flattenedHighlightAmount - 1.0) > 0.001 {
             let highlightShadow = CIFilter.highlightShadowAdjust()
             highlightShadow.inputImage = output
-            highlightShadow.shadowAmount = profile.shadowAmount
-            highlightShadow.highlightAmount = profile.highlightAmount
+            highlightShadow.shadowAmount = flattenedShadowAmount
+            highlightShadow.highlightAmount = flattenedHighlightAmount
             output = highlightShadow.outputImage ?? output
         }
 
@@ -427,14 +435,14 @@ public struct PresetService {
         let controls = CIFilter.colorControls()
         controls.inputImage = bw
         controls.saturation = 0.0
-        controls.contrast = 1.45
-        controls.brightness = -0.01
+        controls.contrast = 1.10
+        controls.brightness = 0.0
         bw = controls.outputImage ?? bw
 
         let shadowHighlight = CIFilter.highlightShadowAdjust()
         shadowHighlight.inputImage = bw
-        shadowHighlight.shadowAmount = -0.55
-        shadowHighlight.highlightAmount = 0.72
+        shadowHighlight.shadowAmount = 0.10
+        shadowHighlight.highlightAmount = 0.88
         bw = shadowHighlight.outputImage ?? bw
 
         let mask = sinCityRedMask(image: image)
@@ -442,7 +450,7 @@ public struct PresetService {
         let colorBoost = CIFilter.colorControls()
         colorBoost.inputImage = image
         colorBoost.saturation = 2.0
-        colorBoost.contrast = 1.12
+        colorBoost.contrast = 1.04
         colorBoost.brightness = 0.0
         let boostedColor = colorBoost.outputImage ?? image
 
@@ -686,20 +694,10 @@ public struct PresetService {
 
         let highlightShadow = CIFilter.highlightShadowAdjust()
         highlightShadow.inputImage = output
-        highlightShadow.shadowAmount = 0.0
-        highlightShadow.highlightAmount = 0.72
+        // Keep a flatter export baseline so users can push contrast later in editing.
+        highlightShadow.shadowAmount = 0.16
+        highlightShadow.highlightAmount = 0.90
         output = highlightShadow.outputImage ?? output
-
-        let exposure = CIFilter.exposureAdjust()
-        exposure.inputImage = output
-        exposure.ev = -0.12
-        output = exposure.outputImage ?? output
-
-        let clamp = CIFilter.colorClamp()
-        clamp.inputImage = output
-        clamp.minComponents = CIVector(x: 0.0, y: 0.0, z: 0.0, w: 0.0)
-        clamp.maxComponents = CIVector(x: 0.98, y: 0.98, z: 0.98, w: 1.0)
-        output = clamp.outputImage ?? output
 
         return output.cropped(to: extent)
     }

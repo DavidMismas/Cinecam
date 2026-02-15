@@ -30,7 +30,14 @@ class VideoProcessor: ObservableObject {
     
     // MARK: - Export
     
-    private static func makeExportSession(for asset: AVAsset, codec: VideoCodecPreference) -> AVAssetExportSession? {
+    private static func makeExportSession(for asset: AVAsset,
+                                          codec: VideoCodecPreference,
+                                          preferPassthrough: Bool) -> AVAssetExportSession? {
+        if preferPassthrough,
+           let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) {
+            return session
+        }
+        
         var presetsToTry: [String] = []
         
         switch codec {
@@ -73,7 +80,10 @@ class VideoProcessor: ObservableObject {
             }
             
             do {
-                guard let exportSession = Self.makeExportSession(for: asset, codec: codecPreference) else {
+                let hasVisualProcessing = preset != nil || !(adjustments?.isIdentity ?? true)
+                guard let exportSession = Self.makeExportSession(for: asset,
+                                                                 codec: codecPreference,
+                                                                 preferPassthrough: !hasVisualProcessing) else {
                     throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not create export session"])
                 }
                 
@@ -85,9 +95,11 @@ class VideoProcessor: ObservableObject {
                 // Note: export(to:as:) sets outputURL and outputFileType, so we don't need to set them on session if we pass them.
                 // But we definitely need to set videoComposition and timeRange BEFORE export.
                 
-                // Apply Video Composition (Async)
-                let composition = try await createComposition(for: asset, preset: preset, adjustments: adjustments)
-                exportSession.videoComposition = composition
+                if hasVisualProcessing {
+                    // `videoComposition` forces a re-encode; skip it for untouched footage.
+                    let composition = try await createComposition(for: asset, preset: preset, adjustments: adjustments)
+                    exportSession.videoComposition = composition
+                }
                 
                 // Time Range
                 if let start = start, let end = end {
@@ -170,4 +182,11 @@ struct AdjustmentSettings {
     var contrast: Double = 1.0
     var highlights: Double = 0.0
     var shadows: Double = 0.0
+    
+    var isIdentity: Bool {
+        abs(exposure) < 0.0001 &&
+        abs(contrast - 1.0) < 0.0001 &&
+        abs(highlights) < 0.0001 &&
+        abs(shadows) < 0.0001
+    }
 }
