@@ -8,67 +8,79 @@ struct ShareView: View {
     @State private var isSharing = false
     @State private var sharePlayer: AVPlayer?
     @State private var playerURL: URL?
+    @State private var videoAspectRatio: CGFloat = 9.0 / 16.0
+    @State private var aspectRatioTask: Task<Void, Never>?
     @State private var isSavingToPhotos = false
     @State private var statusMessage: String?
     
     var body: some View {
-        VStack(spacing: 16) {
-            Text("Your Cinematic Masterpiece")
-                .font(CineTheme.fontTitle)
-                .foregroundColor(CineTheme.orange)
-                .padding()
+        GeometryReader { geometry in
+            let previewMaxHeight = min(max(geometry.size.height * 0.50, 260), 500)
             
-            if let player = sharePlayer {
-                CineVideoPlayer(player: player)
-                    .frame(maxWidth: 380)
-                    .frame(height: 220)
-                    .cornerRadius(CineTheme.buttonCornerRadius)
-                    .clipped()
+            VStack(spacing: 16) {
+                Text("Your Cinematic Masterpiece")
+                    .font(CineTheme.fontTitle)
+                    .foregroundColor(CineTheme.orange)
                     .padding()
-            } else {
-                CinemaRenderAnimationView()
-                    .frame(maxWidth: 380)
-                    .frame(height: 220)
-                    .padding()
-            }
-            
-            Spacer()
-            
-            HStack {
-                Button(action: saveVideoToGallery) {
-                    Text(isSavingToPhotos ? "Saving..." : "Save")
-                }
-                .cineButtonStyle(isPrimary: true)
-                .disabled(viewModel.processedVideoURL == nil || isSavingToPhotos)
-                .opacity((viewModel.processedVideoURL == nil || isSavingToPhotos) ? 0.5 : 1.0)
                 
-                Button(action: openGallery) {
-                    Text("Open Gallery")
+                if let player = sharePlayer {
+                    CineVideoPlayer(player: player)
+                        .aspectRatio(videoAspectRatio, contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: previewMaxHeight)
+                        .background(Color.black.opacity(0.55))
+                        .cornerRadius(CineTheme.buttonCornerRadius)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: CineTheme.buttonCornerRadius, style: .continuous)
+                                .stroke(CineTheme.orange.opacity(0.35), lineWidth: 1)
+                        )
+                        .clipped()
+                        .padding(.horizontal, 16)
+                } else {
+                    CinemaRenderAnimationView(renderProgress: viewModel.renderProgress)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: min(previewMaxHeight, 250))
+                        .padding(.horizontal, 16)
                 }
-                .cineButtonStyle(isPrimary: false)
-            }
-            .padding(.horizontal)
-            
-            HStack {
-                Button(action: { viewModel.navigateBackToCamera() }) {
-                    Text("New Recording")
-                }
-                .cineButtonStyle(isPrimary: false)
                 
-                Button(action: { isSharing = true }) {
-                    Text("Share Video")
+                Spacer(minLength: 6)
+                
+                HStack {
+                    Button(action: saveVideoToGallery) {
+                        Text(isSavingToPhotos ? "Saving..." : "Save")
+                    }
+                    .cineButtonStyle(isPrimary: true)
+                    .disabled(viewModel.processedVideoURL == nil || isSavingToPhotos)
+                    .opacity((viewModel.processedVideoURL == nil || isSavingToPhotos) ? 0.5 : 1.0)
+                    
+                    Button(action: openGallery) {
+                        Text("Open Gallery")
+                    }
+                    .cineButtonStyle(isPrimary: false)
                 }
-                .cineButtonStyle(isPrimary: true)
-                .disabled(viewModel.processedVideoURL == nil)
-                .opacity(viewModel.processedVideoURL == nil ? 0.5 : 1.0)
-                .sheet(isPresented: $isSharing) {
-                    if let url = viewModel.processedVideoURL {
-                        ShareSheet(activityItems: [url])
+                .padding(.horizontal)
+                
+                HStack {
+                    Button(action: { viewModel.navigateBackToCamera() }) {
+                        Text("New Recording")
+                    }
+                    .cineButtonStyle(isPrimary: false)
+                    
+                    Button(action: { isSharing = true }) {
+                        Text("Share Video")
+                    }
+                    .cineButtonStyle(isPrimary: true)
+                    .disabled(viewModel.processedVideoURL == nil)
+                    .opacity(viewModel.processedVideoURL == nil ? 0.5 : 1.0)
+                    .sheet(isPresented: $isSharing) {
+                        if let url = viewModel.processedVideoURL {
+                            ShareSheet(activityItems: [url])
+                        }
                     }
                 }
+                .padding(.horizontal)
+                .padding(.bottom)
             }
-            .padding(.horizontal)
-            .padding(.bottom)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .overlay {
             if let statusMessage {
@@ -92,6 +104,8 @@ struct ShareView: View {
             sharePlayer?.pause()
             sharePlayer = nil
             playerURL = nil
+            aspectRatioTask?.cancel()
+            aspectRatioTask = nil
         }
     }
     
@@ -100,6 +114,9 @@ struct ShareView: View {
             sharePlayer?.pause()
             sharePlayer = nil
             playerURL = nil
+            videoAspectRatio = 9.0 / 16.0
+            aspectRatioTask?.cancel()
+            aspectRatioTask = nil
             return
         }
         
@@ -108,12 +125,49 @@ struct ShareView: View {
             return
         }
         
+        updateAspectRatio(for: url)
         let player = AVPlayer(url: url)
         viewModel.configureInlinePlayback(player)
         player.actionAtItemEnd = .none
         sharePlayer = player
         playerURL = url
         player.play()
+    }
+
+    private func updateAspectRatio(for url: URL) {
+        aspectRatioTask?.cancel()
+        aspectRatioTask = Task {
+            let ratio = await resolvedVideoAspectRatio(for: url)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard playerURL == url else { return }
+                videoAspectRatio = ratio
+            }
+        }
+    }
+
+    private func resolvedVideoAspectRatio(for url: URL) async -> CGFloat {
+        let asset = AVURLAsset(url: url)
+        
+        do {
+            guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
+                return 9.0 / 16.0
+            }
+            
+            let naturalSize = try await videoTrack.load(.naturalSize)
+            let preferredTransform = try await videoTrack.load(.preferredTransform)
+            let transformedSize = naturalSize.applying(preferredTransform)
+            let width = abs(transformedSize.width)
+            let height = abs(transformedSize.height)
+            
+            guard width > 0.0, height > 0.0 else {
+                return 9.0 / 16.0
+            }
+            
+            return width / height
+        } catch {
+            return 9.0 / 16.0
+        }
     }
     
     private func saveVideoToGallery() {
@@ -212,11 +266,15 @@ private struct StatusPopupView: View {
 }
 
 struct CinemaRenderAnimationView: View {
+    let renderProgress: Double
     @State private var animateScanner = false
     @State private var animateReels = false
     @State private var pulse = false
     
     var body: some View {
+        let clampedProgress = min(max(renderProgress, 0.0), 1.0)
+        let percent = Int((clampedProgress * 100.0).rounded())
+        
         VStack(spacing: 16) {
             ZStack {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -280,12 +338,12 @@ struct CinemaRenderAnimationView: View {
                     .stroke(CineTheme.orange.opacity(0.5), lineWidth: 1)
             )
             
-            TimelineView(.periodic(from: .now, by: 0.35)) { context in
-                let step = Int(context.date.timeIntervalSinceReferenceDate * 3)
-                let dotCount = ((step % 4) + 4) % 4
-                let dots = String(repeating: ".", count: dotCount)
+            VStack(spacing: 8) {
+                ProgressView(value: clampedProgress, total: 1.0)
+                    .tint(CineTheme.orange)
+                    .frame(maxWidth: 260)
                 
-                Text("Rendering\(dots)")
+                Text("\(percent)%")
                     .font(CineTheme.fontHeadline)
                     .foregroundColor(.white)
             }

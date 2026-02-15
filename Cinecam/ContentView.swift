@@ -190,7 +190,7 @@ struct LensPickerButton: View {
         case .builtInUltraWideCamera:
             return "0.5x"
         case .builtInTelephotoCamera:
-            return "3x"
+            return "Tele"
         default:
             return "1x"
         }
@@ -200,7 +200,7 @@ struct LensPickerButton: View {
         Menu {
             Button("0.5x") { action(.builtInUltraWideCamera) }
             Button("1x") { action(.builtInWideAngleCamera) }
-            Button("3x") { action(.builtInTelephotoCamera) }
+            Button("Tele") { action(.builtInTelephotoCamera) }
         } label: {
             HStack(spacing: 4) {
                 Text(currentTitle)

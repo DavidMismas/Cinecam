@@ -34,6 +34,13 @@ struct FocusFeedback: Identifiable {
 }
 
 class CameraManager: NSObject, ObservableObject {
+    private enum SettingsKey {
+        static let selectedFrameRate = "camera.selectedFrameRate"
+        static let useProRes = "camera.useProRes"
+        static let selectedVideoCodec = "camera.selectedVideoCodec"
+        static let lockWhiteBalanceDuringRecording = "camera.lockWhiteBalanceDuringRecording"
+    }
+
     @Published var session = AVCaptureSession()
     @Published var isRecording = false
     @Published var recordedVideoURL: URL?
@@ -44,6 +51,8 @@ class CameraManager: NSObject, ObservableObject {
     // Configuration Properties
     @Published var selectedFrameRate: Int = 30 {
         didSet {
+            guard !isRestoringPersistedSettings else { return }
+            UserDefaults.standard.set(selectedFrameRate, forKey: SettingsKey.selectedFrameRate)
             sessionQueue.async { [weak self] in
                 self?.configureFormat()
             }
@@ -53,6 +62,8 @@ class CameraManager: NSObject, ObservableObject {
     private var recordingTimer: Timer?
     @Published var useProRes: Bool = false {
         didSet {
+            guard !isRestoringPersistedSettings else { return }
+            UserDefaults.standard.set(useProRes, forKey: SettingsKey.useProRes)
             sessionQueue.async { [weak self] in
                 self?.configureOutput()
             }
@@ -60,8 +71,19 @@ class CameraManager: NSObject, ObservableObject {
     }
     @Published var selectedVideoCodec: VideoCodecPreference = .h264 {
         didSet {
+            guard !isRestoringPersistedSettings else { return }
+            UserDefaults.standard.set(selectedVideoCodec.rawValue, forKey: SettingsKey.selectedVideoCodec)
             sessionQueue.async { [weak self] in
                 self?.configureOutput()
+            }
+        }
+    }
+    @Published var lockWhiteBalanceDuringRecording: Bool = false {
+        didSet {
+            guard !isRestoringPersistedSettings else { return }
+            UserDefaults.standard.set(lockWhiteBalanceDuringRecording, forKey: SettingsKey.lockWhiteBalanceDuringRecording)
+            sessionQueue.async { [weak self] in
+                self?.applyWhiteBalanceStateForCurrentCaptureContext()
             }
         }
     }
@@ -75,9 +97,11 @@ class CameraManager: NSObject, ObservableObject {
     private var captureRotationObservation: NSKeyValueObservation?
     private var focusFeedbackDismissWorkItem: DispatchWorkItem?
     private let focusFeedbackDisplayDuration: TimeInterval = 1.8
+    private var isRestoringPersistedSettings = false
     
     override init() {
         super.init()
+        restorePersistedSettings()
         checkPermissions()
     }
     
@@ -122,6 +146,7 @@ class CameraManager: NSObject, ObservableObject {
             
             self.configureOutput()
             self.configureFormat() // Apply 4K 60fps logic
+            self.applyWhiteBalanceStateForCurrentCaptureContext()
             
             self.session.commitConfiguration()
             self.session.startRunning()
@@ -167,6 +192,7 @@ class CameraManager: NSObject, ObservableObject {
                 
                 // Setup Rotation Coordinator
                 setupCaptureRotationCoordinator(for: device)
+                applyWhiteBalanceStateForCurrentCaptureContext()
             }
         } catch {
             print("Error setting up input: \(error)")
@@ -436,11 +462,55 @@ class CameraManager: NSObject, ObservableObject {
             connection.videoRotationAngle = angle
         }
     }
+
+    private func restorePersistedSettings() {
+        isRestoringPersistedSettings = true
+        defer { isRestoringPersistedSettings = false }
+        
+        let defaults = UserDefaults.standard
+        let persistedFrameRate = defaults.object(forKey: SettingsKey.selectedFrameRate) as? Int ?? 30
+        selectedFrameRate = [30, 60].contains(persistedFrameRate) ? persistedFrameRate : 30
+        
+        if let rawCodec = defaults.string(forKey: SettingsKey.selectedVideoCodec),
+           let codec = VideoCodecPreference(rawValue: rawCodec) {
+            selectedVideoCodec = codec
+        }
+        
+        useProRes = defaults.bool(forKey: SettingsKey.useProRes)
+        lockWhiteBalanceDuringRecording = defaults.bool(forKey: SettingsKey.lockWhiteBalanceDuringRecording)
+    }
+
+    private func applyWhiteBalanceStateForCurrentCaptureContext() {
+        let shouldLock = isRecording && lockWhiteBalanceDuringRecording
+        setWhiteBalanceLocked(shouldLock)
+    }
+
+    private func setWhiteBalanceLocked(_ isLocked: Bool) {
+        guard let device = videoInput?.device ?? activeDevice else { return }
+        
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            
+            if isLocked {
+                if device.isWhiteBalanceModeSupported(.locked) {
+                    device.whiteBalanceMode = .locked
+                }
+            } else if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                device.whiteBalanceMode = .continuousAutoWhiteBalance
+            } else if device.isWhiteBalanceModeSupported(.autoWhiteBalance) {
+                device.whiteBalanceMode = .autoWhiteBalance
+            }
+        } catch {
+            print("Error applying white balance mode: \(error)")
+        }
+    }
     
     func startRecording() {
         guard !isRecording else { return }
         
-        // Rotation is now handled by RotationCoordinator dynamically
+        // Rotation is handled by RotationCoordinator dynamically.
+        setWhiteBalanceLocked(lockWhiteBalanceDuringRecording)
         
         let outputFileName = NSUUID().uuidString
         let outputFilePath = (NSTemporaryDirectory() as NSString).appendingPathComponent((outputFileName as NSString).appendingPathExtension("mov")!)
@@ -457,7 +527,9 @@ class CameraManager: NSObject, ObservableObject {
     
     func stopRecording() {
         guard isRecording else { return }
+
         videoOutput.stopRecording()
+        setWhiteBalanceLocked(false)
         
         DispatchQueue.main.async {
             self.isRecording = false

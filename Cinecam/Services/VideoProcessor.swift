@@ -55,6 +55,7 @@ class VideoProcessor: ObservableObject {
                      codecPreference: VideoCodecPreference,
                      start: Double? = nil,
                      end: Double? = nil,
+                     progress: ((Double) -> Void)? = nil,
                      completion: @escaping (Result<URL, Error>) -> Void) {
         
         let outputFileName = NSUUID().uuidString
@@ -66,9 +67,18 @@ class VideoProcessor: ObservableObject {
         }
         
         Task {
+            var progressTimer: DispatchSourceTimer?
+            defer {
+                progressTimer?.cancel()
+            }
+            
             do {
                 guard let exportSession = Self.makeExportSession(for: asset, codec: codecPreference) else {
                     throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not create export session"])
+                }
+                
+                DispatchQueue.main.async {
+                    progress?(0.0)
                 }
                 
                 // Configure Session
@@ -86,13 +96,31 @@ class VideoProcessor: ObservableObject {
                      exportSession.timeRange = CMTimeRange(start: startTime, end: endTime)
                 }
                 
+                if progress != nil {
+                    let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "com.cinecam.exportProgress"))
+                    timer.schedule(deadline: .now(), repeating: .milliseconds(120))
+                    timer.setEventHandler { [weak exportSession] in
+                        guard let exportSession else { return }
+                        let progressValue = Double(exportSession.progress)
+                        DispatchQueue.main.async {
+                            progress?(progressValue)
+                        }
+                    }
+                    timer.resume()
+                    progressTimer = timer
+                }
+                
                 // Export (Async)
                 try await exportSession.export(to: outputURL, as: .mov)
                 
                 DispatchQueue.main.async {
+                    progress?(1.0)
                     completion(.success(outputURL))
                 }
             } catch {
+                DispatchQueue.main.async {
+                    progress?(0.0)
+                }
                 DispatchQueue.main.async {
                     completion(.failure(error))
                 }

@@ -36,6 +36,15 @@ struct SettingsView: View {
                         }
                     }
                     .listRowBackground(CineTheme.darkGray)
+
+                    Section(header: Text("Camera").foregroundColor(CineTheme.orange)) {
+                        Toggle("Lock White Balance While Recording", isOn: $cameraManager.lockWhiteBalanceDuringRecording)
+
+                        Text("When enabled, white balance is fixed for the full recording and returns to auto after recording stops.")
+                            .font(.footnote)
+                            .foregroundColor(CineTheme.textSecondary)
+                    }
+                    .listRowBackground(CineTheme.darkGray)
                     
                     Section(header: Text("About").foregroundColor(CineTheme.orange)) {
                         Text("Cinerec v1.0")

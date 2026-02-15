@@ -26,6 +26,7 @@ class CameraViewModel: ObservableObject {
     // Player State
     @Published var player: AVPlayer?
     @Published var recordingTimeFormatted: String = "00:00"
+    @Published var renderProgress: Double = 0.0
     
     private var cancellables = Set<AnyCancellable>()
     private var activeRenderToken = UUID()
@@ -71,6 +72,7 @@ class CameraViewModel: ObservableObject {
     
     func navigateToShare() {
         processedVideoURL = nil
+        renderProgress = 0.0
         activeRenderToken = UUID()
         currentScreen = .share
         player?.pause()
@@ -88,6 +90,7 @@ class CameraViewModel: ObservableObject {
         adjustmentSettings = AdjustmentSettings()
         recordedVideoURL = nil
         processedVideoURL = nil
+        renderProgress = 0.0
         activeRenderToken = UUID()
         player = nil
     }
@@ -97,12 +100,14 @@ class CameraViewModel: ObservableObject {
     func importVideo(from url: URL) {
         selectedPreset = nil
         adjustmentSettings = AdjustmentSettings()
+        renderProgress = 0.0
         activeRenderToken = UUID()
         loadSourceVideo(url)
     }
     
     private func loadSourceVideo(_ url: URL) {
         processedVideoURL = nil
+        renderProgress = 0.0
         recordedVideoURL = url
         setupPlayer(with: url)
         currentScreen = .presetSelection
@@ -187,18 +192,25 @@ class CameraViewModel: ObservableObject {
         let renderToken = activeRenderToken
         
         processedVideoURL = nil
+        renderProgress = 0.0
         videoProcessor.exportVideo(asset: asset, 
                                    preset: preset, 
                                    adjustments: adjustments,
-                                   codecPreference: cameraManager.selectedVideoCodec) { [weak self] result in
+                                   codecPreference: cameraManager.selectedVideoCodec,
+                                   progress: { [weak self] progress in
+                                       guard let self = self, self.activeRenderToken == renderToken else { return }
+                                       self.renderProgress = min(max(progress, 0.0), 1.0)
+                                   }) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self, self.activeRenderToken == renderToken else { return }
                 switch result {
                 case .success(let finalUrl):
+                    self.renderProgress = 1.0
                     self.processedVideoURL = finalUrl
                     // Pre-load the shared video into a player if needed, or just keep the preview player
                 case .failure(let error):
                     print("Export failed: \(error)")
+                    self.renderProgress = 0.0
                     self.processedVideoURL = nil
                 }
             }
