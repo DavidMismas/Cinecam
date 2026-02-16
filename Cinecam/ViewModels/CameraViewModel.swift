@@ -59,6 +59,14 @@ class CameraViewModel: ObservableObject {
             }
             .store(in: &cancellables)
         
+        cameraManager.$selectedOutputAspectRatio
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updatePlayerPreview()
+            }
+            .store(in: &cancellables)
+        
         $isRenderingFinalVideo
             .removeDuplicates()
             .receive(on: RunLoop.main)
@@ -135,6 +143,7 @@ class CameraViewModel: ObservableObject {
         isRenderingFinalVideo = false
         recordedVideoURL = url
         setupPlayer(with: url)
+        updatePlayerPreview()
         currentScreen = .presetSelection
     }
     
@@ -168,7 +177,8 @@ class CameraViewModel: ObservableObject {
             // Create composition with current settings
             if let composition = try? await videoProcessor.createComposition(for: asset, 
                                                                              preset: selectedPreset, 
-                                                                             adjustments: adjustmentSettings) {
+                                                                             adjustments: adjustmentSettings,
+                                                                             outputAspectRatio: cameraManager.selectedOutputAspectRatio) {
                 await MainActor.run {
                     player.currentItem?.videoComposition = composition
                 }
@@ -228,7 +238,8 @@ class CameraViewModel: ObservableObject {
         videoProcessor.exportVideo(asset: asset, 
                                    preset: preset, 
                                    adjustments: adjustments,
-                                   codecPreference: cameraManager.selectedVideoCodec,
+                                   outputAspectRatio: cameraManager.selectedOutputAspectRatio,
+                                   targetBitrateMbps: cameraManager.renderBitrateMbps,
                                    progress: { [weak self] progress in
                                        guard let self = self, self.activeRenderToken == renderToken else { return }
                                        self.renderProgress = min(max(progress, 0.0), 1.0)

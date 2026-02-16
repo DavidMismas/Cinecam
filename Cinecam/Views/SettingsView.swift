@@ -18,26 +18,66 @@ struct SettingsView: View {
                         .pickerStyle(.segmented)
                         .tint(CineTheme.orange)
                         
-                        Picker("Codec", selection: $cameraManager.selectedVideoCodec) {
-                            ForEach(VideoCodecPreference.allCases) { codec in
-                                Text(codec.title).tag(codec)
+                        Picker("Output Aspect Ratio", selection: $cameraManager.selectedOutputAspectRatio) {
+                            ForEach(OutputAspectRatioOption.allCases) { option in
+                                Text(option.title).tag(option)
                             }
                         }
                         .pickerStyle(.segmented)
                         .tint(CineTheme.orange)
-                        .disabled(cameraManager.useProRes)
                         
-                        Toggle("Apple ProRes", isOn: $cameraManager.useProRes)
-                        
-                        if cameraManager.useProRes {
-                            Text("Codec selection is disabled while ProRes is enabled.")
-                                .font(.footnote)
+                        HStack {
+                            Text("Codec")
+                            Spacer()
+                            Text("HEVC (H.265)")
                                 .foregroundColor(CineTheme.textSecondary)
                         }
+                        
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Recording Bitrate")
+                                Spacer()
+                                Text("\(Int(cameraManager.recordingBitrateMbps.rounded())) Mbps")
+                                    .foregroundColor(CineTheme.textSecondary)
+                            }
+                            
+                            Slider(
+                                value: $cameraManager.recordingBitrateMbps,
+                                in: CameraManager.bitrateRangeMbps,
+                                step: 5
+                            )
+                            .tint(CineTheme.orange)
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Render Bitrate")
+                                Spacer()
+                                Text("\(Int(cameraManager.renderBitrateMbps.rounded())) Mbps")
+                                    .foregroundColor(CineTheme.textSecondary)
+                            }
+                            
+                            Slider(
+                                value: $cameraManager.renderBitrateMbps,
+                                in: CameraManager.bitrateRangeMbps,
+                                step: 5
+                            )
+                            .tint(CineTheme.orange)
+                        }
+                        
+                        Text("Higher bitrate = larger files and better detail retention. Actual max quality still depends on device codec limits.")
+                            .font(.footnote)
+                            .foregroundColor(CineTheme.textSecondary)
                     }
                     .listRowBackground(CineTheme.darkGray)
 
                     Section(header: Text("Camera").foregroundColor(CineTheme.orange)) {
+                        Toggle("Software Stabilization (Crop)", isOn: $cameraManager.useSoftwareStabilization)
+                        
+                        Text("On: smoother footage with digital crop. Off: no software stabilization crop.")
+                            .font(.footnote)
+                            .foregroundColor(CineTheme.textSecondary)
+                        
                         Toggle("Lock White Balance While Recording", isOn: $cameraManager.lockWhiteBalanceDuringRecording)
 
                         Text("When enabled, white balance is fixed for the full recording and returns to auto after recording stops.")

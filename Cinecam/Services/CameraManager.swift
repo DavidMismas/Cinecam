@@ -1,28 +1,31 @@
 import AVFoundation
 import SwiftUI
 import Combine
+import VideoToolbox
 
-enum VideoCodecPreference: String, CaseIterable, Identifiable {
-    case h264
-    case h265
+enum OutputAspectRatioOption: String, CaseIterable, Identifiable {
+    case native16x9
+    case cinema21x9
     
     var id: String { rawValue }
     
     var title: String {
         switch self {
-        case .h264:
-            return "H.264"
-        case .h265:
-            return "H.265"
+        case .native16x9:
+            return "16:9"
+        case .cinema21x9:
+            return "21:9"
         }
     }
     
-    var captureCodec: AVVideoCodecType {
+    func targetAspectRatio(for sourceSize: CGSize) -> CGFloat? {
         switch self {
-        case .h264:
-            return .h264
-        case .h265:
-            return .hevc
+        case .native16x9:
+            return nil
+        case .cinema21x9:
+            let landscapeRatio: CGFloat = 21.0 / 9.0
+            let isLandscape = abs(sourceSize.width) >= abs(sourceSize.height)
+            return isLandscape ? landscapeRatio : (1.0 / landscapeRatio)
         }
     }
 }
@@ -36,10 +39,18 @@ struct FocusFeedback: Identifiable {
 class CameraManager: NSObject, ObservableObject {
     private enum SettingsKey {
         static let selectedFrameRate = "camera.selectedFrameRate"
-        static let useProRes = "camera.useProRes"
-        static let selectedVideoCodec = "camera.selectedVideoCodec"
+        static let selectedOutputAspectRatio = "camera.selectedOutputAspectRatio"
+        static let recordingBitrateMbps = "camera.recordingBitrateMbps"
+        static let renderBitrateMbps = "camera.renderBitrateMbps"
+        static let useSoftwareStabilization = "camera.useSoftwareStabilization"
         static let lockWhiteBalanceDuringRecording = "camera.lockWhiteBalanceDuringRecording"
     }
+    
+    static let bitrateRangeMbps: ClosedRange<Double> = 20...500
+    static let defaultRecordingBitrateMbps: Double = 220
+    static let defaultRenderBitrateMbps: Double = 260
+    
+    private let required4KResolution = CMVideoDimensions(width: 3840, height: 2160)
 
     @Published var session = AVCaptureSession()
     @Published var isRecording = false
@@ -47,6 +58,8 @@ class CameraManager: NSObject, ObservableObject {
     @Published var currentLens: AVCaptureDevice.DeviceType = .builtInWideAngleCamera
     @Published var isAuthorized = false
     @Published var focusFeedback: FocusFeedback?
+    @Published var statusMessage: String?
+    @Published private(set) var is4KFormatActive = false
     
     // Configuration Properties
     @Published var selectedFrameRate: Int = 30 {
@@ -55,24 +68,47 @@ class CameraManager: NSObject, ObservableObject {
             UserDefaults.standard.set(selectedFrameRate, forKey: SettingsKey.selectedFrameRate)
             sessionQueue.async { [weak self] in
                 self?.configureFormat()
+                self?.configureOutput()
             }
+        }
+    }
+    @Published var selectedOutputAspectRatio: OutputAspectRatioOption = .native16x9 {
+        didSet {
+            guard !isRestoringPersistedSettings else { return }
+            UserDefaults.standard.set(selectedOutputAspectRatio.rawValue, forKey: SettingsKey.selectedOutputAspectRatio)
         }
     }
     @Published var recordingDuration: TimeInterval = 0
     private var recordingTimer: Timer?
-    @Published var useProRes: Bool = false {
+    @Published var recordingBitrateMbps: Double = CameraManager.defaultRecordingBitrateMbps {
         didSet {
+            let clamped = Self.clampBitrate(recordingBitrateMbps)
+            if abs(clamped - recordingBitrateMbps) > 0.0001 {
+                recordingBitrateMbps = clamped
+                return
+            }
             guard !isRestoringPersistedSettings else { return }
-            UserDefaults.standard.set(useProRes, forKey: SettingsKey.useProRes)
+            UserDefaults.standard.set(recordingBitrateMbps, forKey: SettingsKey.recordingBitrateMbps)
             sessionQueue.async { [weak self] in
                 self?.configureOutput()
             }
         }
     }
-    @Published var selectedVideoCodec: VideoCodecPreference = .h264 {
+    @Published var renderBitrateMbps: Double = CameraManager.defaultRenderBitrateMbps {
+        didSet {
+            let clamped = Self.clampBitrate(renderBitrateMbps)
+            if abs(clamped - renderBitrateMbps) > 0.0001 {
+                renderBitrateMbps = clamped
+                return
+            }
+            guard !isRestoringPersistedSettings else { return }
+            UserDefaults.standard.set(renderBitrateMbps, forKey: SettingsKey.renderBitrateMbps)
+        }
+    }
+    @Published var useSoftwareStabilization: Bool = true {
         didSet {
             guard !isRestoringPersistedSettings else { return }
-            UserDefaults.standard.set(selectedVideoCodec.rawValue, forKey: SettingsKey.selectedVideoCodec)
+            UserDefaults.standard.set(useSoftwareStabilization, forKey: SettingsKey.useSoftwareStabilization)
             sessionQueue.async { [weak self] in
                 self?.configureOutput()
             }
@@ -96,7 +132,10 @@ class CameraManager: NSObject, ObservableObject {
     private var captureRotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var captureRotationObservation: NSKeyValueObservation?
     private var focusFeedbackDismissWorkItem: DispatchWorkItem?
+    private var pendingFocusLockWorkItem: DispatchWorkItem?
     private let focusFeedbackDisplayDuration: TimeInterval = 1.8
+    private let focusLockDelay: TimeInterval = 0.2
+    private var statusMessageDismissWorkItem: DispatchWorkItem?
     private var isRestoringPersistedSettings = false
     
     override init() {
@@ -144,12 +183,13 @@ class CameraManager: NSObject, ObservableObject {
                 self.session.addOutput(self.videoOutput)
             }
             
+            self.configureFormat() // Apply 4K 60fps logic first (codec availability depends on format)
             self.configureOutput()
-            self.configureFormat() // Apply 4K 60fps logic
             self.applyWhiteBalanceStateForCurrentCaptureContext()
             
             self.session.commitConfiguration()
             self.session.startRunning()
+            self.configureOutput() // Re-apply once running; some codec availability is only final after start.
         }
     }
     
@@ -160,8 +200,8 @@ class CameraManager: NSObject, ObservableObject {
                 self.session.removeInput(currentInput)
             }
             self.setupInput(for: lens)
-            self.configureOutput() // Update connection properties (mirroring, stabilization)
-            self.configureFormat() // Re-apply format constraints to new device
+            self.configureFormat() // Re-apply format constraints to new device first
+            self.configureOutput() // Then apply output settings against the resolved format
             self.session.commitConfiguration()
             
             DispatchQueue.main.async {
@@ -207,41 +247,36 @@ class CameraManager: NSObject, ObservableObject {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
             
-            let supportedFormats = device.formats.filter { format in
-                format.videoSupportedFrameRateRanges.contains { range in
+            let supported4KFormats = device.formats.filter { format in
+                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                guard dimensions.width == required4KResolution.width,
+                      dimensions.height == required4KResolution.height else {
+                    return false
+                }
+                return format.videoSupportedFrameRateRanges.contains { range in
                     range.minFrameRate <= targetFrameRate && targetFrameRate <= range.maxFrameRate
                 }
             }
             
-            guard !supportedFormats.isEmpty else {
-                print("No camera format supports \(selectedFrameRate) FPS on current lens.")
+            guard !supported4KFormats.isEmpty else {
+                set4KCaptureAvailability(
+                    false,
+                    message: "4K \(selectedFrameRate) FPS is unavailable for this lens. Switch lens or FPS."
+                )
                 return
             }
 
-            let bestFormat = supportedFormats.sorted { lhs, rhs in
-                let leftDimensions = CMVideoFormatDescriptionGetDimensions(lhs.formatDescription)
-                let rightDimensions = CMVideoFormatDescriptionGetDimensions(rhs.formatDescription)
-                let leftIs4K = leftDimensions.width == 3840 && leftDimensions.height == 2160
-                let rightIs4K = rightDimensions.width == 3840 && rightDimensions.height == 2160
-
-                if leftIs4K != rightIs4K {
-                    return leftIs4K
-                }
-
-                let leftPixels = Int(leftDimensions.width) * Int(leftDimensions.height)
-                let rightPixels = Int(rightDimensions.width) * Int(rightDimensions.height)
-
-                if leftPixels != rightPixels {
-                    return leftPixels > rightPixels
-                }
-
+            let bestFormat = supported4KFormats.sorted { lhs, rhs in
                 let leftMaxFPS = lhs.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
                 let rightMaxFPS = rhs.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
                 return leftMaxFPS > rightMaxFPS
             }.first
 
             guard let bestFormat else {
-                print("Failed to select a format for \(selectedFrameRate) FPS")
+                set4KCaptureAvailability(
+                    false,
+                    message: "4K format selection failed at \(selectedFrameRate) FPS."
+                )
                 return
             }
 
@@ -250,18 +285,17 @@ class CameraManager: NSObject, ObservableObject {
             let duration = CMTime(value: 1, timescale: CMTimeScale(selectedFrameRate))
             device.activeVideoMinFrameDuration = duration
             device.activeVideoMaxFrameDuration = duration
+            set4KCaptureAvailability(true, message: nil)
             
         } catch {
+            set4KCaptureAvailability(false, message: "4K setup error: \(error.localizedDescription)")
             print("Error configuring format: \(error)")
         }
     }
     
     private func configureOutput() {
         guard let connection = videoOutput.connection(with: .video) else { return }
-        
-        if connection.isVideoStabilizationSupported {
-            connection.preferredVideoStabilizationMode = .cinematic
-        }
+        applyStabilizationMode(for: connection)
         
         // Mirroring Logic for Front Camera
         if let input = videoInput, input.device.position == .front {
@@ -273,35 +307,42 @@ class CameraManager: NSObject, ObservableObject {
                 connection.isVideoMirrored = false
             }
         }
-        
-        // ProRes Configuration (if available)
-        if useProRes {
-             let proResCodecs: [AVVideoCodecType] = [.proRes422, .proRes422HQ, .proRes422LT, .proRes4444]
-             if let availableCodec = videoOutput.availableVideoCodecTypes.first(where: { proResCodecs.contains($0) }) {
-                 videoOutput.setOutputSettings([AVVideoCodecKey: availableCodec], for: connection)
-             } else {
-                 print("ProRes not supported on this device/configuration.")
-                 setPreferredCodec(selectedVideoCodec.captureCodec, for: connection)
-             }
-        } else {
-            setPreferredCodec(selectedVideoCodec.captureCodec, for: connection)
-        }
+
+        configureHEVCOutput(for: connection)
     }
     
-    private func setPreferredCodec(_ codec: AVVideoCodecType, for connection: AVCaptureConnection) {
-        if videoOutput.availableVideoCodecTypes.contains(codec) {
-            videoOutput.setOutputSettings([AVVideoCodecKey: codec], for: connection)
+    private func applyStabilizationMode(for connection: AVCaptureConnection) {
+        guard connection.isVideoStabilizationSupported else { return }
+        
+        connection.preferredVideoStabilizationMode = useSoftwareStabilization ? .cinematic : .off
+    }
+    
+    private func configureHEVCOutput(for connection: AVCaptureConnection) {
+        guard videoOutput.availableVideoCodecTypes.contains(.hevc) else {
+            presentStatusMessage("HEVC unavailable for current lens/FPS/format.")
             return
         }
         
-        // H.264 should be broadly available on iOS devices.
-        if videoOutput.availableVideoCodecTypes.contains(.h264) {
-            print("Preferred codec \(codec.rawValue) unavailable. Falling back to H.264.")
-            videoOutput.setOutputSettings([AVVideoCodecKey: AVVideoCodecType.h264], for: connection)
-            return
+        let supportedKeys = Set(videoOutput.supportedOutputSettingsKeys(for: connection))
+        var settings: [String: Any] = [AVVideoCodecKey: AVVideoCodecType.hevc]
+        
+        if supportedKeys.contains(AVVideoCompressionPropertiesKey) {
+            settings[AVVideoCompressionPropertiesKey] = makeCompressionProperties()
         }
         
-        print("No supported codec found for current output connection.")
+        videoOutput.setOutputSettings(settings, for: connection)
+    }
+    
+    private func makeCompressionProperties() -> [String: Any] {
+        let bitrateBps = Int(Self.clampBitrate(recordingBitrateMbps) * 1_000_000)
+        var compression: [String: Any] = [
+            kVTCompressionPropertyKey_AverageBitRate as String: bitrateBps,
+            AVVideoExpectedSourceFrameRateKey: selectedFrameRate
+        ]
+        
+        compression[AVVideoProfileLevelKey] = kVTProfileLevel_HEVC_Main_AutoLevel as String
+        
+        return compression
     }
     
     private func setupCaptureRotationCoordinator(for device: AVCaptureDevice) {
@@ -374,6 +415,7 @@ class CameraManager: NSObject, ObservableObject {
     
     private func updateFocus(at point: CGPoint, lockAfterFocus: Bool) {
         sessionQueue.async {
+            self.cancelPendingFocusLock()
             guard let device = self.videoInput?.device ?? self.activeDevice else { return }
             
             do {
@@ -417,10 +459,12 @@ class CameraManager: NSObject, ObservableObject {
                 device.unlockForConfiguration()
                 
                 guard lockAfterFocus else { return }
-                
-                self.sessionQueue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+
+                let lockWorkItem = DispatchWorkItem { [weak self] in
                     self?.lockFocusAndExposure()
                 }
+                self.pendingFocusLockWorkItem = lockWorkItem
+                self.sessionQueue.asyncAfter(deadline: .now() + self.focusLockDelay, execute: lockWorkItem)
             } catch {
                 print("Error updating focus: \(error)")
             }
@@ -428,6 +472,7 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     private func lockFocusAndExposure() {
+        pendingFocusLockWorkItem = nil
         guard let device = videoInput?.device ?? activeDevice else { return }
         
         do {
@@ -448,6 +493,11 @@ class CameraManager: NSObject, ObservableObject {
         } catch {
             print("Error locking focus: \(error)")
         }
+    }
+    
+    private func cancelPendingFocusLock() {
+        pendingFocusLockWorkItem?.cancel()
+        pendingFocusLockWorkItem = nil
     }
 
     private func applyCaptureRotation(_ angle: CGFloat) {
@@ -470,13 +520,18 @@ class CameraManager: NSObject, ObservableObject {
         let defaults = UserDefaults.standard
         let persistedFrameRate = defaults.object(forKey: SettingsKey.selectedFrameRate) as? Int ?? 30
         selectedFrameRate = [30, 60].contains(persistedFrameRate) ? persistedFrameRate : 30
-        
-        if let rawCodec = defaults.string(forKey: SettingsKey.selectedVideoCodec),
-           let codec = VideoCodecPreference(rawValue: rawCodec) {
-            selectedVideoCodec = codec
+        if let rawAspectRatio = defaults.string(forKey: SettingsKey.selectedOutputAspectRatio),
+           let aspectRatio = OutputAspectRatioOption(rawValue: rawAspectRatio) {
+            selectedOutputAspectRatio = aspectRatio
         }
         
-        useProRes = defaults.bool(forKey: SettingsKey.useProRes)
+        let persistedRecordingBitrate = defaults.object(forKey: SettingsKey.recordingBitrateMbps) as? Double ?? Self.defaultRecordingBitrateMbps
+        recordingBitrateMbps = Self.clampBitrate(persistedRecordingBitrate)
+        
+        let persistedRenderBitrate = defaults.object(forKey: SettingsKey.renderBitrateMbps) as? Double ?? Self.defaultRenderBitrateMbps
+        renderBitrateMbps = Self.clampBitrate(persistedRenderBitrate)
+        useSoftwareStabilization = defaults.object(forKey: SettingsKey.useSoftwareStabilization) as? Bool ?? true
+        
         lockWhiteBalanceDuringRecording = defaults.bool(forKey: SettingsKey.lockWhiteBalanceDuringRecording)
     }
 
@@ -508,6 +563,10 @@ class CameraManager: NSObject, ObservableObject {
     
     func startRecording() {
         guard !isRecording else { return }
+        guard is4KFormatActive else {
+            presentStatusMessage("Recording blocked: 4K format is not active for this lens/FPS.")
+            return
+        }
         
         // Rotation is handled by RotationCoordinator dynamically.
         setWhiteBalanceLocked(lockWhiteBalanceDuringRecording)
@@ -537,11 +596,42 @@ class CameraManager: NSObject, ObservableObject {
             self.recordingTimer = nil
         }
     }
+    
+    private func set4KCaptureAvailability(_ isActive: Bool, message: String?) {
+        DispatchQueue.main.async {
+            self.is4KFormatActive = isActive
+            if let message {
+                self.presentStatusMessage(message)
+            }
+        }
+    }
+    
+    private func presentStatusMessage(_ message: String) {
+        DispatchQueue.main.async {
+            self.statusMessageDismissWorkItem?.cancel()
+            self.statusMessageDismissWorkItem = nil
+            self.statusMessage = message
+            
+            let dismissWorkItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                if self.statusMessage == message {
+                    self.statusMessage = nil
+                }
+            }
+            self.statusMessageDismissWorkItem = dismissWorkItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: dismissWorkItem)
+        }
+    }
+    
+    private static func clampBitrate(_ value: Double) -> Double {
+        min(max(value, bitrateRangeMbps.lowerBound), bitrateRangeMbps.upperBound)
+    }
 }
 
 extension CameraManager: AVCaptureFileOutputRecordingDelegate {
     func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
         if let error = error {
+            presentStatusMessage("Recording failed: \(error.localizedDescription)")
             print("Error recording: \(error)")
             return
         }

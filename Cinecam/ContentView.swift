@@ -38,7 +38,15 @@ struct CameraScreen: View {
     @State private var showSettings = false
     @State private var showVideoImportPicker = false
     @State private var rotationAngle: Angle = .zero
-    private let previewAspectRatio: CGFloat = 9.0 / 16.0
+    
+    private var previewAspectRatio: CGFloat {
+        switch cameraManager.selectedOutputAspectRatio {
+        case .native16x9:
+            return 9.0 / 16.0
+        case .cinema21x9:
+            return 9.0 / 21.0
+        }
+    }
     
     init(viewModel: CameraViewModel) {
         self.viewModel = viewModel
@@ -61,15 +69,18 @@ struct CameraScreen: View {
                     .overlay {
                         FocusFeedbackOverlay(feedback: cameraManager.focusFeedback)
                     }
-                    .overlay(alignment: .topTrailing) {
-                        if viewModel.cameraManager.useProRes {
-                            Text("ProRes")
-                                .font(CineTheme.fontHeadline)
+                    .overlay(alignment: .top) {
+                        if let statusMessage = cameraManager.statusMessage {
+                            Text(statusMessage)
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
                                 .foregroundColor(CineTheme.orange)
-                                .rotationEffect(rotationAngle)
-                                .animation(.default, value: rotationAngle)
-                                .padding(.top, 28)
-                                .padding(.trailing, 16)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(Color.black.opacity(0.72))
+                                .clipShape(Capsule())
+                                .padding(.top, 24)
+                                .padding(.horizontal, 16)
                         }
                     }
                     .clipped()
@@ -118,6 +129,8 @@ struct CameraScreen: View {
                                 cameraManager.startRecording()
                             }
                         }
+                        .disabled(!cameraManager.is4KFormatActive && !cameraManager.isRecording)
+                        .opacity((!cameraManager.is4KFormatActive && !cameraManager.isRecording) ? 0.5 : 1.0)
 
                         Group {
                             if cameraManager.isRecording {
