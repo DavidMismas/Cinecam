@@ -11,6 +11,8 @@ struct ShareView: View {
     @State private var videoAspectRatio: CGFloat = 9.0 / 16.0
     @State private var aspectRatioTask: Task<Void, Never>?
     @State private var isSavingToPhotos = false
+    @State private var autoSavedVideoURL: URL?
+    @State private var didCompleteShare = false
     @State private var statusMessage: String?
     
     var body: some View {
@@ -46,21 +48,6 @@ struct ShareView: View {
                 Spacer(minLength: 6)
                 
                 HStack {
-                    Button(action: saveVideoToGallery) {
-                        Text(isSavingToPhotos ? "Saving..." : "Save")
-                    }
-                    .cineButtonStyle(isPrimary: true)
-                    .disabled(viewModel.processedVideoURL == nil || isSavingToPhotos)
-                    .opacity((viewModel.processedVideoURL == nil || isSavingToPhotos) ? 0.5 : 1.0)
-                    
-                    Button(action: openGallery) {
-                        Text("Open Gallery")
-                    }
-                    .cineButtonStyle(isPrimary: false)
-                }
-                .padding(.horizontal)
-                
-                HStack {
                     Button(action: { viewModel.navigateBackToCamera() }) {
                         Text("New Recording")
                     }
@@ -74,7 +61,9 @@ struct ShareView: View {
                     .opacity(viewModel.processedVideoURL == nil ? 0.5 : 1.0)
                     .sheet(isPresented: $isSharing) {
                         if let url = viewModel.processedVideoURL {
-                            ShareSheet(activityItems: [url])
+                            ShareSheet(activityItems: [url]) { completed in
+                                didCompleteShare = completed
+                            }
                         }
                     }
                 }
@@ -93,9 +82,15 @@ struct ShareView: View {
         .animation(.easeOut(duration: 0.2), value: statusMessage != nil)
         .onAppear {
             prepareSharePlayer(with: viewModel.processedVideoURL)
+            autoSaveRenderedVideoIfNeeded(viewModel.processedVideoURL)
         }
         .onChange(of: viewModel.processedVideoURL) { _, newURL in
             prepareSharePlayer(with: newURL)
+            if newURL == nil {
+                autoSavedVideoURL = nil
+            } else {
+                autoSaveRenderedVideoIfNeeded(newURL)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime, object: sharePlayer?.currentItem)) { _ in
             sharePlayer?.seek(to: .zero)
@@ -107,6 +102,10 @@ struct ShareView: View {
             playerURL = nil
             aspectRatioTask?.cancel()
             aspectRatioTask = nil
+        }
+        .onChange(of: isSharing) { _, isPresented in
+            guard !isPresented else { return }
+            handleShareCompletion()
         }
     }
     
@@ -171,14 +170,12 @@ struct ShareView: View {
         }
     }
     
-    private func saveVideoToGallery() {
-        guard let url = viewModel.processedVideoURL else {
-            showStatus("Video is still rendering")
-            return
-        }
+    private func autoSaveRenderedVideoIfNeeded(_ url: URL?) {
+        guard let url else { return }
+        guard autoSavedVideoURL != url else { return }
+        guard !isSavingToPhotos else { return }
         
         isSavingToPhotos = true
-        
         if #available(iOS 14, *) {
             PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
                 handlePhotoPermission(status: status, videoURL: url)
@@ -206,29 +203,23 @@ struct ShareView: View {
         } completionHandler: { success, _ in
             DispatchQueue.main.async {
                 isSavingToPhotos = false
-                showStatus(success ? "Saved to gallery" : "Save failed")
+                guard success else {
+                    showStatus("Auto-save failed")
+                    return
+                }
+                
+                autoSavedVideoURL = videoURL
+                showStatus("Saved to gallery")
+                viewModel.cleanupAfterAutoSave()
             }
         }
     }
     
-    private func openGallery() {
-        let application = UIApplication.shared
-        let candidates = ["photos-redirect://", "photos://"].compactMap(URL.init(string:))
-        
-        func openNext(at index: Int) {
-            guard index < candidates.count else {
-                showStatus("Could not open gallery")
-                return
-            }
-            
-            application.open(candidates[index], options: [:]) { opened in
-                if !opened {
-                    openNext(at: index + 1)
-                }
-            }
-        }
-        
-        openNext(at: 0)
+    private func handleShareCompletion() {
+        guard didCompleteShare else { return }
+        didCompleteShare = false
+        showStatus("Shared")
+        viewModel.cleanupAfterShareCompletion()
     }
     
     private func showStatus(_ message: String) {
@@ -408,9 +399,13 @@ private struct FilmPerforationStrip: View {
 struct ShareSheet: UIViewControllerRepresentable {
     var activityItems: [Any]
     var applicationActivities: [UIActivity]? = nil
+    var onComplete: ((Bool) -> Void)? = nil
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
         let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: applicationActivities)
+        controller.completionWithItemsHandler = { _, completed, _, _ in
+            onComplete?(completed)
+        }
         return controller
     }
 

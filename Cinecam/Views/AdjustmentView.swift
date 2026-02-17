@@ -37,7 +37,7 @@ struct AdjustmentView: View {
                 .cineButtonStyle(isPrimary: false)
                 
                 Button(action: { viewModel.navigateToShare() }) {
-                    Text("Save & Share")
+                    Text("Render & Share")
                 }
                 .cineButtonStyle(isPrimary: true)
             }

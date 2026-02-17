@@ -32,8 +32,12 @@ class CameraViewModel: ObservableObject {
     
     private var cancellables = Set<AnyCancellable>()
     private var activeRenderToken = UUID()
+    private let fileManager = FileManager.default
+    private let managedVideoExtensions: Set<String> = ["mov", "mp4", "m4v"]
     
     init() {
+        purgeTemporaryVideoFiles()
+        
         // Listen for new recordings
         cameraManager.$recordedVideoURL
             .receive(on: RunLoop.main)
@@ -101,6 +105,7 @@ class CameraViewModel: ObservableObject {
     }
     
     func navigateToShare() {
+        removeManagedVideoFileIfNeeded(processedVideoURL)
         processedVideoURL = nil
         renderProgress = 0.0
         activeRenderToken = UUID()
@@ -113,6 +118,8 @@ class CameraViewModel: ObservableObject {
     
     func navigateBackToCamera() {
         pausePlaybackAndClearNowPlaying()
+        cleanupWorkingVideoFiles(keepProcessedOutput: false)
+        purgeTemporaryVideoFiles()
         currentScreen = .camera
         cameraManager.startSession() 
         // Reset state
@@ -129,6 +136,7 @@ class CameraViewModel: ObservableObject {
     // MARK: - Video Handling
     
     func importVideo(from url: URL) {
+        cleanupWorkingVideoFiles(keepProcessedOutput: false, preserving: [url])
         selectedPreset = nil
         adjustmentSettings = AdjustmentSettings()
         renderProgress = 0.0
@@ -138,6 +146,7 @@ class CameraViewModel: ObservableObject {
     }
     
     private func loadSourceVideo(_ url: URL) {
+        cleanupWorkingVideoFiles(keepProcessedOutput: false, preserving: [url])
         processedVideoURL = nil
         renderProgress = 0.0
         isRenderingFinalVideo = false
@@ -232,6 +241,7 @@ class CameraViewModel: ObservableObject {
         let asset = AVURLAsset(url: url)
         let renderToken = activeRenderToken
         
+        removeManagedVideoFileIfNeeded(processedVideoURL)
         processedVideoURL = nil
         renderProgress = 0.0
         isRenderingFinalVideo = true
@@ -264,5 +274,75 @@ class CameraViewModel: ObservableObject {
     
     private func updateIdleTimerState() {
         UIApplication.shared.isIdleTimerDisabled = cameraManager.isRecording || isRenderingFinalVideo
+    }
+    
+    func cleanupAfterAutoSave() {
+        cleanupWorkingVideoFiles(keepProcessedOutput: true)
+        if let processedVideoURL {
+            purgeTemporaryVideoFiles(keeping: [processedVideoURL])
+        } else {
+            purgeTemporaryVideoFiles()
+        }
+    }
+    
+    func cleanupAfterShareCompletion() {
+        cleanupWorkingVideoFiles(keepProcessedOutput: false)
+        purgeTemporaryVideoFiles()
+    }
+    
+    private func cleanupWorkingVideoFiles(keepProcessedOutput: Bool, preserving urlsToKeep: [URL] = []) {
+        let keepSet = Set(urlsToKeep.map(\.standardizedFileURL))
+        
+        if let recordedVideoURL, !keepSet.contains(recordedVideoURL.standardizedFileURL) {
+            removeManagedVideoFileIfNeeded(recordedVideoURL)
+            self.recordedVideoURL = nil
+        }
+        
+        if let managerRecordedURL = cameraManager.recordedVideoURL,
+           !keepSet.contains(managerRecordedURL.standardizedFileURL) {
+            removeManagedVideoFileIfNeeded(managerRecordedURL)
+            cameraManager.recordedVideoURL = nil
+        }
+        
+        if !keepProcessedOutput,
+           let processedVideoURL,
+           !keepSet.contains(processedVideoURL.standardizedFileURL) {
+            removeManagedVideoFileIfNeeded(processedVideoURL)
+            self.processedVideoURL = nil
+        }
+    }
+    
+    func purgeTemporaryVideoFiles(keeping keepURLs: [URL] = []) {
+        let keepSet = Set(keepURLs.map(\.standardizedFileURL))
+        let tempDirectory = fileManager.temporaryDirectory
+        
+        guard let fileURLs = try? fileManager.contentsOfDirectory(
+            at: tempDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        
+        for url in fileURLs where isManagedTemporaryVideoURL(url) {
+            let normalizedURL = url.standardizedFileURL
+            if keepSet.contains(normalizedURL) { continue }
+            try? fileManager.removeItem(at: normalizedURL)
+        }
+    }
+    
+    private func removeManagedVideoFileIfNeeded(_ url: URL?) {
+        guard let url else { return }
+        let normalizedURL = url.standardizedFileURL
+        guard isManagedTemporaryVideoURL(normalizedURL) else { return }
+        try? fileManager.removeItem(at: normalizedURL)
+    }
+    
+    private func isManagedTemporaryVideoURL(_ url: URL) -> Bool {
+        guard url.isFileURL else { return false }
+        guard managedVideoExtensions.contains(url.pathExtension.lowercased()) else { return false }
+        
+        let normalizedURL = url.standardizedFileURL
+        let tempPath = fileManager.temporaryDirectory.standardizedFileURL.path
+        let filePath = normalizedURL.path
+        return filePath == tempPath || filePath.hasPrefix(tempPath + "/")
     }
 }
