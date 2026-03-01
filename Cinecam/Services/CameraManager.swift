@@ -137,6 +137,7 @@ class CameraManager: NSObject, ObservableObject {
     private let focusLockDelay: TimeInterval = 0.2
     private var statusMessageDismissWorkItem: DispatchWorkItem?
     private var isRestoringPersistedSettings = false
+    private var exposureSmoothingTimer: Timer?
     
     override init() {
         super.init()
@@ -417,29 +418,33 @@ class CameraManager: NSObject, ObservableObject {
         sessionQueue.async {
             self.cancelPendingFocusLock()
             guard let device = self.videoInput?.device ?? self.activeDevice else { return }
-            
+
             do {
                 try device.lockForConfiguration()
-                
+
+                // Always update focus point
                 if device.isFocusPointOfInterestSupported {
                     device.focusPointOfInterest = point
                 }
-                
-                if device.isExposurePointOfInterestSupported {
+
+                // Skip exposure point/mode changes during recording to avoid disrupting smoothed AE
+                if !self.isRecording && device.isExposurePointOfInterestSupported {
                     device.exposurePointOfInterest = point
                 }
-                
+
                 if lockAfterFocus {
                     if device.isFocusModeSupported(.autoFocus) {
                         device.focusMode = .autoFocus
                     } else if device.isFocusModeSupported(.continuousAutoFocus) {
                         device.focusMode = .continuousAutoFocus
                     }
-                    
-                    if device.isExposureModeSupported(.autoExpose) {
-                        device.exposureMode = .autoExpose
-                    } else if device.isExposureModeSupported(.continuousAutoExposure) {
-                        device.exposureMode = .continuousAutoExposure
+
+                    if !self.isRecording {
+                        if device.isExposureModeSupported(.autoExpose) {
+                            device.exposureMode = .autoExpose
+                        } else if device.isExposureModeSupported(.continuousAutoExposure) {
+                            device.exposureMode = .continuousAutoExposure
+                        }
                     }
                 } else {
                     if device.isFocusModeSupported(.continuousAutoFocus) {
@@ -447,17 +452,19 @@ class CameraManager: NSObject, ObservableObject {
                     } else if device.isFocusModeSupported(.autoFocus) {
                         device.focusMode = .autoFocus
                     }
-                    
-                    if device.isExposureModeSupported(.continuousAutoExposure) {
-                        device.exposureMode = .continuousAutoExposure
-                    } else if device.isExposureModeSupported(.autoExpose) {
-                        device.exposureMode = .autoExpose
+
+                    if !self.isRecording {
+                        if device.isExposureModeSupported(.continuousAutoExposure) {
+                            device.exposureMode = .continuousAutoExposure
+                        } else if device.isExposureModeSupported(.autoExpose) {
+                            device.exposureMode = .autoExpose
+                        }
                     }
                 }
-                
+
                 device.isSubjectAreaChangeMonitoringEnabled = !lockAfterFocus
                 device.unlockForConfiguration()
-                
+
                 guard lockAfterFocus else { return }
 
                 let lockWorkItem = DispatchWorkItem { [weak self] in
@@ -474,20 +481,23 @@ class CameraManager: NSObject, ObservableObject {
     private func lockFocusAndExposure() {
         pendingFocusLockWorkItem = nil
         guard let device = videoInput?.device ?? activeDevice else { return }
-        
+
         do {
             try device.lockForConfiguration()
-            
+
             if device.isLockingFocusWithCustomLensPositionSupported {
                 device.setFocusModeLocked(lensPosition: device.lensPosition, completionHandler: nil)
             } else if device.isFocusModeSupported(.locked) {
                 device.focusMode = .locked
             }
-            
-            if device.isExposureModeSupported(.locked) {
-                device.exposureMode = .locked
+
+            // Don't lock exposure during recording — smoothing timer handles it
+            if !isRecording {
+                if device.isExposureModeSupported(.locked) {
+                    device.exposureMode = .locked
+                }
             }
-            
+
             device.isSubjectAreaChangeMonitoringEnabled = false
             device.unlockForConfiguration()
         } catch {
@@ -581,6 +591,9 @@ class CameraManager: NSObject, ObservableObject {
             self.recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
                 self.recordingDuration += 1
             }
+            self.sessionQueue.async {
+                self.startExposureSmoothing()
+            }
         }
     }
     
@@ -594,6 +607,11 @@ class CameraManager: NSObject, ObservableObject {
             self.isRecording = false
             self.recordingTimer?.invalidate()
             self.recordingTimer = nil
+            self.exposureSmoothingTimer?.invalidate()
+            self.exposureSmoothingTimer = nil
+            self.sessionQueue.async {
+                self.restoreAutoExposure()
+            }
         }
     }
     
@@ -625,6 +643,77 @@ class CameraManager: NSObject, ObservableObject {
     
     private static func clampBitrate(_ value: Double) -> Double {
         min(max(value, bitrateRangeMbps.lowerBound), bitrateRangeMbps.upperBound)
+    }
+
+    // MARK: - Exposure Smoothing
+
+    private func startExposureSmoothing() {
+        guard let device = videoInput?.device ?? activeDevice else { return }
+        do {
+            try device.lockForConfiguration()
+            // Snapshot current AE values and switch to custom so we control the ramp
+            if device.isExposureModeSupported(.custom) {
+                device.setExposureModeCustom(
+                    duration: device.exposureDuration,
+                    iso: device.iso,
+                    completionHandler: nil
+                )
+            }
+            device.unlockForConfiguration()
+        } catch {
+            print("Exposure smoothing setup error: \(error)")
+            return
+        }
+
+        DispatchQueue.main.async {
+            self.exposureSmoothingTimer = Timer.scheduledTimer(
+                withTimeInterval: 0.25, repeats: true
+            ) { [weak self] _ in
+                self?.exposureSmoothingStep()
+            }
+        }
+    }
+
+    private func exposureSmoothingStep() {
+        sessionQueue.async { [weak self] in
+            guard let self,
+                  let device = self.videoInput?.device ?? self.activeDevice,
+                  self.isRecording else { return }
+
+            let offset = device.exposureTargetOffset
+            guard abs(offset) > 0.05 else { return }
+
+            // Move 25% toward the metered target per tick (~4 ticks to fully adapt)
+            let evStep = offset * 0.25
+            let isoMultiplier = pow(2.0, evStep)
+            let targetISO = min(
+                max(device.iso * isoMultiplier, device.activeFormat.minISO),
+                device.activeFormat.maxISO
+            )
+
+            do {
+                try device.lockForConfiguration()
+                device.setExposureModeCustom(
+                    duration: device.exposureDuration,
+                    iso: targetISO,
+                    completionHandler: nil
+                )
+                device.unlockForConfiguration()
+            } catch {}
+        }
+    }
+
+    private func restoreAutoExposure() {
+        guard let device = videoInput?.device ?? activeDevice else { return }
+        do {
+            try device.lockForConfiguration()
+            if device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+            }
+            device.unlockForConfiguration()
+        } catch {
+            print("Error restoring auto exposure: \(error)")
+        }
     }
 }
 

@@ -17,11 +17,17 @@ struct CineTheme {
 }
 
 extension View {
-    func cineButtonStyle(isPrimary: Bool = true) -> some View {
-        self
-            .font(CineTheme.fontHeadline)
+    func cineButtonStyle(isPrimary: Bool = true, compact: Bool = false) -> some View {
+        let buttonFont: Font = compact
+            ? .system(size: 16, weight: .semibold, design: .rounded)
+            : CineTheme.fontHeadline
+        let verticalPadding: CGFloat = compact ? 10 : 16
+
+        return self
+            .font(buttonFont)
             .foregroundColor(isPrimary ? CineTheme.darkBackground : CineTheme.orange)
-            .padding()
+            .padding(.horizontal, 12)
+            .padding(.vertical, verticalPadding)
             .frame(maxWidth: .infinity)
             .background(isPrimary ? CineTheme.orange : CineTheme.darkGray)
             .cornerRadius(CineTheme.buttonCornerRadius)
@@ -29,5 +35,6 @@ extension View {
                 RoundedRectangle(cornerRadius: CineTheme.buttonCornerRadius)
                     .stroke(CineTheme.orange, lineWidth: isPrimary ? 0 : 2)
             )
+            .contentShape(Rectangle())
     }
 }

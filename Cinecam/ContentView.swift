@@ -14,12 +14,18 @@ struct ContentView: View {
             switch viewModel.currentScreen {
             case .camera:
                 CameraScreen(viewModel: viewModel)
-            case .presetSelection:
-                PresetSelectionView(viewModel: viewModel)
-            case .adjustments:
-                AdjustmentView(viewModel: viewModel)
-            case .share:
-                ShareView(viewModel: viewModel)
+            case .basicAdjustments:
+                BasicAdjustmentsView(viewModel: viewModel)
+            case .colorBalance:
+                ColorBalanceView(viewModel: viewModel)
+            case .hueCast:
+                HueCastView(viewModel: viewModel)
+            case .textureEffects:
+                TextureEffectsView(viewModel: viewModel)
+            case .finalEffects:
+                FinalEffectsView(viewModel: viewModel)
+            case .renderedPreview:
+                RenderedVideoPreviewView(viewModel: viewModel)
             }
         }
         .statusBar(hidden: true)
