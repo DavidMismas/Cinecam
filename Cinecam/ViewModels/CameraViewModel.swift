@@ -31,6 +31,7 @@ class CameraViewModel: ObservableObject {
     @Published var recordingTimeFormatted: String = "00:00"
     @Published var renderProgress: Double = 0.0
     @Published private(set) var isRenderingFinalVideo = false
+    @Published var isImportingVideo = false
 
     private var cancellables = Set<AnyCancellable>()
     private var activeRenderToken = UUID()

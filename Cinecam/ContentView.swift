@@ -27,7 +27,13 @@ struct ContentView: View {
             case .renderedPreview:
                 RenderedVideoPreviewView(viewModel: viewModel)
             }
+
+            if viewModel.isImportingVideo {
+                ImportLoadingOverlay()
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: viewModel.isImportingVideo)
         .statusBar(hidden: true)
         .onChange(of: scenePhase) { _, newPhase in
             viewModel.handleScenePhase(newPhase)
@@ -158,10 +164,16 @@ struct CameraScreen: View {
             }
         }
         .sheet(isPresented: $showVideoImportPicker) {
-            VideoImportPicker { importedURL in
-                guard let importedURL else { return }
-                viewModel.importVideo(from: importedURL)
-            }
+            VideoImportPicker(
+                onStartLoading: {
+                    viewModel.isImportingVideo = true
+                },
+                onPick: { importedURL in
+                    defer { viewModel.isImportingVideo = false }
+                    guard let importedURL else { return }
+                    viewModel.importVideo(from: importedURL)
+                }
+            )
         }
         .onAppear {
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
@@ -363,69 +375,98 @@ struct FocusFeedbackMarker: View {
 }
 
 struct VideoImportPicker: UIViewControllerRepresentable {
+    let onStartLoading: () -> Void
     let onPick: (URL?) -> Void
-    
+
     func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick)
+        Coordinator(onStartLoading: onStartLoading, onPick: onPick)
     }
-    
+
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var configuration = PHPickerConfiguration(photoLibrary: .shared())
         configuration.filter = .videos
         configuration.selectionLimit = 1
-        
+
         let controller = PHPickerViewController(configuration: configuration)
         controller.delegate = context.coordinator
         return controller
     }
-    
+
     func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
-    
+
     final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        private let onStartLoading: () -> Void
         private let onPick: (URL?) -> Void
-        
-        init(onPick: @escaping (URL?) -> Void) {
+
+        init(onStartLoading: @escaping () -> Void, onPick: @escaping (URL?) -> Void) {
+            self.onStartLoading = onStartLoading
             self.onPick = onPick
         }
-        
+
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             picker.dismiss(animated: true)
-            
+
             guard let provider = results.first?.itemProvider else {
                 onPick(nil)
                 return
             }
-            
+
             let movieType = UTType.movie.identifier
             guard provider.hasItemConformingToTypeIdentifier(movieType) else {
                 onPick(nil)
                 return
             }
-            
+
+            // Signal loading before the async file transfer starts
+            onStartLoading()
+
             provider.loadFileRepresentation(forTypeIdentifier: movieType) { [onPick] pickedURL, _ in
                 guard let pickedURL else {
-                    DispatchQueue.main.async {
-                        onPick(nil)
-                    }
+                    DispatchQueue.main.async { onPick(nil) }
                     return
                 }
-                
+
                 let fileExtension = pickedURL.pathExtension.isEmpty ? "mov" : pickedURL.pathExtension
                 let copiedURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent(UUID().uuidString)
                     .appendingPathExtension(fileExtension)
-                
+
                 do {
                     try FileManager.default.copyItem(at: pickedURL, to: copiedURL)
-                    DispatchQueue.main.async {
-                        onPick(copiedURL)
-                    }
+                    DispatchQueue.main.async { onPick(copiedURL) }
                 } catch {
-                    DispatchQueue.main.async {
-                        onPick(nil)
-                    }
+                    DispatchQueue.main.async { onPick(nil) }
                 }
             }
         }
+    }
+}
+
+private struct ImportLoadingOverlay: View {
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.72)
+                .ignoresSafeArea()
+
+            VStack(spacing: 16) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(CineTheme.orange)
+                    .scaleEffect(1.4)
+
+                Text("Importing video...")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+            }
+            .padding(.horizontal, 32)
+            .padding(.vertical, 24)
+            .background(CineTheme.darkGray.opacity(0.95))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(CineTheme.orange.opacity(0.45), lineWidth: 1)
+            )
+        }
+        .allowsHitTesting(true)
     }
 }
