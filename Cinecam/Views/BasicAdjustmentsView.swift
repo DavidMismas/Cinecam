@@ -5,6 +5,7 @@ struct BasicAdjustmentsView: View {
 
     @State private var statusMessage: String?
     @State private var isSavingOriginal = false
+    @State private var renderSpin = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -71,6 +72,22 @@ struct BasicAdjustmentsView: View {
                     .padding(.top, 12)
             }
         }
+        .overlay {
+            if viewModel.isRenderingFinalVideo {
+                BasicRenderProgressOverlay(progress: viewModel.renderProgress, spin: renderSpin)
+                    .transition(.opacity)
+            }
+        }
+        .onChange(of: viewModel.isRenderingFinalVideo) { _, isRendering in
+            if isRendering {
+                renderSpin = false
+                withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
+                    renderSpin = true
+                }
+            } else {
+                renderSpin = false
+            }
+        }
         .onChange(of: viewModel.adjustmentSettings.exposure) { _, _ in viewModel.updatePlayerPreview() }
         .onChange(of: viewModel.adjustmentSettings.contrast) { _, _ in viewModel.updatePlayerPreview() }
         .onChange(of: viewModel.adjustmentSettings.shadows) { _, _ in viewModel.updatePlayerPreview() }
@@ -124,6 +141,56 @@ struct BasicAdjustmentsView: View {
                 statusMessage = nil
             }
         }
+    }
+}
+
+private struct BasicRenderProgressOverlay: View {
+    let progress: Double
+    let spin: Bool
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.55)
+                .ignoresSafeArea()
+
+            VStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.16), lineWidth: 7)
+                        .frame(width: 84, height: 84)
+
+                    Circle()
+                        .trim(from: 0, to: max(0.08, min(progress, 1.0)))
+                        .stroke(
+                            AngularGradient(
+                                colors: [CineTheme.orange, .yellow, CineTheme.orange],
+                                center: .center
+                            ),
+                            style: StrokeStyle(lineWidth: 7, lineCap: .round)
+                        )
+                        .frame(width: 84, height: 84)
+                        .rotationEffect(.degrees(spin ? 360 : 0))
+                }
+
+                Text("Rendering video...")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+
+                Text("\(Int((max(0.0, min(progress, 1.0)) * 100).rounded()))%")
+                    .font(.system(size: 13, weight: .regular, design: .rounded))
+                    .foregroundColor(.white.opacity(0.85))
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(CineTheme.darkGray.opacity(0.95))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(CineTheme.orange.opacity(0.45), lineWidth: 1)
+            )
+            .padding(.horizontal, 24)
+        }
+        .allowsHitTesting(true)
     }
 }
 

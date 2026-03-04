@@ -238,13 +238,13 @@ struct PresetStudioView: View {
                 title: "Red / Blue",
                 value: $draftSettings.redBlueBalance,
                 range: -1.0...1.0,
-                tint: draftSettings.redBlueBalance >= 0 ? .red : .blue
+                tint: draftSettings.redBlueBalance >= 0 ? .blue : .red
             )
             AdjustmentSlider(
                 title: "Green / Tint",
                 value: $draftSettings.greenTint,
                 range: -1.0...1.0,
-                tint: draftSettings.greenTint >= 0 ? .green : .pink
+                tint: draftSettings.greenTint >= 0 ? .pink : .green
             )
             AdjustmentSlider(
                 title: "Saturation (+/-)",
