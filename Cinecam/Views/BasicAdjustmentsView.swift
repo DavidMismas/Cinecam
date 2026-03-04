@@ -17,6 +17,11 @@ struct BasicAdjustmentsView: View {
                 VideoEditorPreviewPanel(player: player, sourceURL: sourceURL)
             }
 
+            if !viewModel.presets.isEmpty {
+                PresetQuickPicker(viewModel: viewModel)
+                    .padding(.horizontal, 16)
+            }
+
             ScrollView {
                 VStack(spacing: 12) {
                     AdjustmentSlider(title: "Exposure", value: $viewModel.adjustmentSettings.exposure, range: -2.0...2.0)
@@ -28,7 +33,7 @@ struct BasicAdjustmentsView: View {
                 .padding(.top, 2)
                 .padding(.bottom, 4)
             }
-            .frame(maxHeight: 190)
+            .frame(maxHeight: 170)
 
             Spacer(minLength: 0)
 
@@ -79,12 +84,32 @@ struct BasicAdjustmentsView: View {
         }
 
         isSavingOriginal = true
-        VideoLibrarySaver.saveVideo(url: sourceURL) { result in
+        // If any adjustments are active (including preset), save rendered output.
+        guard !viewModel.adjustmentSettings.isIdentity else {
+            saveToLibrary(url: sourceURL, successMessage: "Original saved")
+            return
+        }
+
+        viewModel.renderFinalVideo { renderResult in
+            switch renderResult {
+            case .success(let renderedURL):
+                saveToLibrary(url: renderedURL, successMessage: "Saved with adjustments")
+            case .failure:
+                DispatchQueue.main.async {
+                    isSavingOriginal = false
+                    showStatus("Render failed")
+                }
+            }
+        }
+    }
+
+    private func saveToLibrary(url: URL, successMessage: String) {
+        VideoLibrarySaver.saveVideo(url: url) { result in
             DispatchQueue.main.async {
                 isSavingOriginal = false
                 switch result {
                 case .success:
-                    showStatus("Original saved")
+                    showStatus(successMessage)
                 case .failure:
                     showStatus("Save failed")
                 }
@@ -99,5 +124,53 @@ struct BasicAdjustmentsView: View {
                 statusMessage = nil
             }
         }
+    }
+}
+
+private struct PresetQuickPicker: View {
+    @ObservedObject var viewModel: CameraViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Quick Presets")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundColor(CineTheme.orange)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Button(action: { viewModel.resetAdjustmentsToDefault() }) {
+                        Text("None")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(CineTheme.darkGray)
+                            .clipShape(Capsule())
+                            .overlay(
+                                Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                            )
+                    }
+
+                    ForEach(viewModel.presets) { preset in
+                        let isActive = preset.settings == viewModel.adjustmentSettings
+                        Button(action: { viewModel.applyPreset(preset) }) {
+                            Text(preset.name)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundColor(isActive ? CineTheme.darkBackground : .white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(isActive ? CineTheme.orange : CineTheme.darkGray)
+                                .clipShape(Capsule())
+                                .overlay(
+                                    Capsule().stroke(CineTheme.orange.opacity(isActive ? 0.0 : 0.45), lineWidth: 1)
+                                )
+                        }
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(CineTheme.darkGray.opacity(0.52))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

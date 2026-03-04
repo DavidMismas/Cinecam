@@ -14,6 +14,8 @@ struct ContentView: View {
             switch viewModel.currentScreen {
             case .camera:
                 CameraScreen(viewModel: viewModel)
+            case .presetStudio:
+                PresetStudioView(viewModel: viewModel)
             case .basicAdjustments:
                 BasicAdjustmentsView(viewModel: viewModel)
             case .colorBalance:
@@ -115,6 +117,16 @@ struct CameraScreen: View {
                     }
 
                     Spacer()
+
+                    Button(action: { viewModel.navigateToPresetStudio() }) {
+                        Image(systemName: "slider.horizontal.3")
+                            .foregroundColor(.white)
+                            .font(.system(size: 24))
+                            .rotationEffect(rotationAngle)
+                            .animation(.default, value: rotationAngle)
+                    }
+                    .disabled(cameraManager.isRecording)
+                    .opacity(cameraManager.isRecording ? 0.5 : 1.0)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 2)

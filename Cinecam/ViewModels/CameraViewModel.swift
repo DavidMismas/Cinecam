@@ -6,6 +6,7 @@ import UIKit
 
 enum AppScreen {
     case camera
+    case presetStudio
     case basicAdjustments
     case colorBalance
     case hueCast
@@ -14,7 +15,30 @@ enum AppScreen {
     case renderedPreview
 }
 
+struct AdjustmentPreset: Identifiable, Codable, Equatable {
+    let id: UUID
+    var name: String
+    var settings: AdjustmentSettings
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        settings: AdjustmentSettings,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.settings = settings
+        self.createdAt = createdAt
+    }
+}
+
 class CameraViewModel: ObservableObject {
+    private enum PresetStorageKey {
+        static let presets = "camera.adjustmentPresets.v1"
+    }
+
     @Published var currentScreen: AppScreen = .camera
 
     // Services
@@ -32,6 +56,7 @@ class CameraViewModel: ObservableObject {
     @Published var renderProgress: Double = 0.0
     @Published private(set) var isRenderingFinalVideo = false
     @Published var isImportingVideo = false
+    @Published private(set) var presets: [AdjustmentPreset] = []
 
     private var cancellables = Set<AnyCancellable>()
     private var activeRenderToken = UUID()
@@ -41,6 +66,7 @@ class CameraViewModel: ObservableObject {
     init() {
         purgeTemporaryVideoFiles()
         UIApplication.shared.isIdleTimerDisabled = true
+        loadPresets()
 
         cameraManager.$recordedVideoURL
             .receive(on: RunLoop.main)
@@ -99,6 +125,15 @@ class CameraViewModel: ObservableObject {
         updatePlayerPreview()
     }
 
+    func navigateToPresetStudio() {
+        pausePlaybackAndClearNowPlaying()
+        currentScreen = .presetStudio
+    }
+
+    func closePresetStudio() {
+        currentScreen = .camera
+    }
+
     func navigateToColorBalance() {
         currentScreen = .colorBalance
         updatePlayerPreview()
@@ -139,6 +174,51 @@ class CameraViewModel: ObservableObject {
         isRenderingFinalVideo = false
         activeRenderToken = UUID()
         player = nil
+    }
+
+    func applyPreset(_ preset: AdjustmentPreset) {
+        adjustmentSettings = sanitizedCastSettings(preset.settings)
+        updatePlayerPreview()
+    }
+
+    func resetAdjustmentsToDefault() {
+        adjustmentSettings = AdjustmentSettings()
+        updatePlayerPreview()
+    }
+
+    @discardableResult
+    func savePreset(name: String, settings: AdjustmentSettings) -> AdjustmentPreset {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName = trimmedName.isEmpty ? nextDefaultPresetName() : trimmedName
+
+        let preset = AdjustmentPreset(name: resolvedName, settings: sanitizedCastSettings(settings))
+        presets.insert(preset, at: 0)
+        persistPresets()
+        return preset
+    }
+
+    @discardableResult
+    func updatePreset(id: UUID, name: String, settings: AdjustmentSettings) -> AdjustmentPreset? {
+        guard let existingIndex = presets.firstIndex(where: { $0.id == id }) else {
+            return nil
+        }
+
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName = trimmedName.isEmpty ? presets[existingIndex].name : trimmedName
+
+        var updated = presets[existingIndex]
+        updated.name = resolvedName
+        updated.settings = sanitizedCastSettings(settings)
+
+        presets.remove(at: existingIndex)
+        presets.insert(updated, at: 0)
+        persistPresets()
+        return updated
+    }
+
+    func deletePreset(id: UUID) {
+        presets.removeAll { $0.id == id }
+        persistPresets()
     }
 
     // MARK: - Video Handling
@@ -348,5 +428,50 @@ class CameraViewModel: ObservableObject {
         let tempPath = fileManager.temporaryDirectory.standardizedFileURL.path
         let filePath = normalizedURL.path
         return filePath == tempPath || filePath.hasPrefix(tempPath + "/")
+    }
+
+    private func nextDefaultPresetName() -> String {
+        let existingNames = Set(presets.map { $0.name.lowercased() })
+        var index = 1
+        while existingNames.contains("preset \(index)") {
+            index += 1
+        }
+        return "Preset \(index)"
+    }
+
+    private func loadPresets() {
+        guard let data = UserDefaults.standard.data(forKey: PresetStorageKey.presets) else {
+            presets = []
+            return
+        }
+
+        guard let decoded = try? JSONDecoder().decode([AdjustmentPreset].self, from: data) else {
+            presets = []
+            return
+        }
+
+        presets = decoded
+            .map { preset in
+                AdjustmentPreset(
+                    id: preset.id,
+                    name: preset.name,
+                    settings: sanitizedCastSettings(preset.settings),
+                    createdAt: preset.createdAt
+                )
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func persistPresets() {
+        guard let encoded = try? JSONEncoder().encode(presets) else { return }
+        UserDefaults.standard.set(encoded, forKey: PresetStorageKey.presets)
+    }
+
+    private func sanitizedCastSettings(_ settings: AdjustmentSettings) -> AdjustmentSettings {
+        var normalized = settings
+        normalized.globalColorCast = max(normalized.globalColorCast, 0.0)
+        normalized.shadowsColorCast = max(normalized.shadowsColorCast, 0.0)
+        normalized.highlightsColorCast = max(normalized.highlightsColorCast, 0.0)
+        return normalized
     }
 }

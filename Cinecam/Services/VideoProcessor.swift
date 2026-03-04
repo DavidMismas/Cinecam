@@ -4,11 +4,14 @@ import CoreImage.CIFilterBuiltins
 import SwiftUI
 import Combine
 import VideoToolbox
+import UIKit
 
 class VideoProcessor: ObservableObject {
     private struct UncheckedSendableBox<Value>: @unchecked Sendable {
         let value: Value
     }
+
+    private let ciContext = CIContext()
 
     private enum ExportError: LocalizedError {
         case missingVideoTrack
@@ -75,6 +78,16 @@ class VideoProcessor: ObservableObject {
             spatialVideoConfigurations: baseComposition.spatialVideoConfigurations
         )
         return AVVideoComposition(configuration: configuration)
+    }
+
+    // MARK: - Still Preview
+
+    func renderPreviewImage(from sourceImage: CIImage, adjustments: AdjustmentSettings) -> UIImage? {
+        let output = applyAdjustments(adjustments, to: sourceImage)
+        guard let cgImage = ciContext.createCGImage(output, from: output.extent) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage)
     }
 
     // MARK: - Export
@@ -548,24 +561,27 @@ class VideoProcessor: ObservableObject {
 
     private func applyHueCast(_ settings: AdjustmentSettings, to image: CIImage) -> CIImage {
         var output = image
+        let globalCast = max(settings.globalColorCast, 0.0)
+        let shadowsCast = max(settings.shadowsColorCast, 0.0)
+        let highlightsCast = max(settings.highlightsColorCast, 0.0)
 
-        if abs(settings.globalColorCast) > 0.0001 {
+        if globalCast > 0.0001 {
             output = applyGlobalCast(to: output,
                                      hue: settings.globalCastHue,
-                                     amount: settings.globalColorCast)
+                                     amount: globalCast)
         }
 
-        if abs(settings.shadowsColorCast) > 0.0001 {
+        if shadowsCast > 0.0001 {
             output = applyMaskedCast(to: output,
                                      hue: settings.shadowsCastHue,
-                                     amount: settings.shadowsColorCast,
+                                     amount: shadowsCast,
                                      targetShadows: true)
         }
 
-        if abs(settings.highlightsColorCast) > 0.0001 {
+        if highlightsCast > 0.0001 {
             output = applyMaskedCast(to: output,
                                      hue: settings.highlightsCastHue,
-                                     amount: settings.highlightsColorCast,
+                                     amount: highlightsCast,
                                      targetShadows: false)
         }
 
@@ -673,10 +689,10 @@ class VideoProcessor: ObservableObject {
     }
 
     private func applyGlobalCast(to image: CIImage, hue: Double, amount: Double) -> CIImage {
-        let strength = min(max(abs(amount), 0.0), 1.0) * 0.28
+        let strength = min(max(amount, 0.0), 1.0) * 0.28
         guard strength > 0.0001 else { return image }
 
-        let color = resolvedCastColor(baseHue: hue, signedAmount: amount)
+        let color = resolvedCastColor(baseHue: hue)
         let tint = CIImage(color: CIColor(color: color.withAlphaComponent(strength))).cropped(to: image.extent)
         return tint
             .applyingFilter("CISourceOverCompositing", parameters: [kCIInputBackgroundImageKey: image])
@@ -687,7 +703,7 @@ class VideoProcessor: ObservableObject {
                                  hue: Double,
                                  amount: Double,
                                  targetShadows: Bool) -> CIImage {
-        let strength = min(max(abs(amount), 0.0), 1.0)
+        let strength = min(max(amount, 0.0), 1.0)
         guard strength > 0.0001 else { return image }
 
         let luminance = image.applyingFilter(
@@ -716,7 +732,7 @@ class VideoProcessor: ObservableObject {
             )
             .cropped(to: image.extent)
 
-        let color = resolvedCastColor(baseHue: hue, signedAmount: amount)
+        let color = resolvedCastColor(baseHue: hue)
         let tint = CIImage(color: CIColor(color: color)).cropped(to: image.extent)
 
         let blend = CIFilter.blendWithMask()
@@ -891,18 +907,17 @@ class VideoProcessor: ObservableObject {
         ])
     }
 
-    private func resolvedCastColor(baseHue: Double, signedAmount: Double) -> UIColor {
+    private func resolvedCastColor(baseHue: Double) -> UIColor {
         let wrappedHue = baseHue.truncatingRemainder(dividingBy: 360)
         let normalizedHue = (wrappedHue < 0 ? wrappedHue + 360 : wrappedHue) / 360.0
-        let hue = signedAmount >= 0 ? normalizedHue : ((normalizedHue + 0.5).truncatingRemainder(dividingBy: 1.0))
-        return UIColor(hue: CGFloat(hue), saturation: 0.70, brightness: 0.58, alpha: 1.0)
+        return UIColor(hue: CGFloat(normalizedHue), saturation: 0.70, brightness: 0.58, alpha: 1.0)
     }
 
 }
 
 // MARK: - Models
 
-struct AdjustmentSettings {
+struct AdjustmentSettings: Codable, Equatable {
     // Step 1
     var exposure: Double = 0.0
     var contrast: Double = 1.0

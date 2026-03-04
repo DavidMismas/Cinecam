@@ -40,14 +40,14 @@ struct HueCastView: View {
     }
 
     private var castLabel: String {
-        "\(selectedCastTarget.rawValue) Cast (+/-)"
+        "\(selectedCastTarget.rawValue) Cast Strength"
     }
 
     var body: some View {
         VStack(spacing: 8) {
             EditorStepTitle(
-                title: "Step 3 · Hue Cast",
-                subtitle: "Pick a zone, then adjust one color + one cast slider"
+                title: "Step 3 · Color Grading",
+                subtitle: "Pick a zone: hue sets color, cast sets strength"
             )
 
             if let player = viewModel.player, let sourceURL = viewModel.recordedVideoURL {
@@ -86,7 +86,8 @@ struct HueCastView: View {
                 AdjustmentSlider(
                     title: castLabel,
                     value: activeCastAmount,
-                    range: -1.0...1.0
+                    range: 0.0...1.0,
+                    tint: activeHueSwatch
                 )
             }
             .padding(.horizontal, 16)

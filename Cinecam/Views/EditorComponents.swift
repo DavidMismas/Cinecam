@@ -261,6 +261,19 @@ struct AdjustmentSlider: View {
     let title: String
     @Binding var value: Double
     let range: ClosedRange<Double>
+    let tint: Color
+
+    init(
+        title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        tint: Color = CineTheme.orange
+    ) {
+        self.title = title
+        self._value = value
+        self.range = range
+        self.tint = tint
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -271,11 +284,11 @@ struct AdjustmentSlider: View {
                 Spacer()
                 Text(String(format: "%.2f", value))
                     .font(.system(size: 12, weight: .regular, design: .rounded))
-                    .foregroundColor(CineTheme.orange)
+                    .foregroundColor(tint)
             }
 
             Slider(value: $value, in: range)
-                .tint(CineTheme.orange)
+                .tint(tint)
                 .scaleEffect(x: 1.0, y: 0.78, anchor: .center)
                 .frame(height: 18)
         }
